@@ -1,0 +1,76 @@
+# ── Downloaded LLM weights ───────────────────────────────────────────────────
+weights/
+# Ollama stores models in ~/.ollama/models (not here), but ignore any
+# accidentally copied weight blobs or manifest files.
+*.gguf
+*.ggml
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.ot
+*.onnx
+
+# MLX weight directories
+gemma-4-*/
+*.mlx/
+
+# Hugging Face cache / snapshot dirs
+.cache/
+hf_cache/
+hub/
+snapshots/
+blobs/
+refs/
+
+# ── Secrets / credentials ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.token
+secrets/
+credentials/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / npm ───────────────────────────────────────────────────────────────
+node_modules/
+.npm/
+*.tgz
+
+# ── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ── Editor artefacts ─────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.history/
+
+# ── Logs / temp ──────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+tmp/
+temp/

@@ -1,0 +1,63 @@
+# ── Downloaded LLM weights ───────────────────────────────────────────────────
+weights/
+*.gguf
+*.ggml
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# Hugging Face cache / snapshot dirs
+.cache/
+hf_cache/
+hub/
+snapshots/
+blobs/
+refs/
+
+# ── Generated local config ─────────────────────────────────────────────────────
+.ornith35b_config
+.ollama.Modelfile
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.token
+secrets/
+credentials/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── macOS / editor ────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Logs / temp ────────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+tmp/
+temp/

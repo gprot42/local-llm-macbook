@@ -1,0 +1,31 @@
+body {
+    margin: 0;
+    padding: 0;
+    background-color: #333;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+}
+
+#game-container {
+    position: relative;
+    border: 4px solid #fff;
+}
+
+#gameCanvas {
+    background-color: #5c94fc; /* Mario Sky Blue */
+    display: block;
+}
+
+#ui {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    font-size: 20px;
+    text-shadow: 2px 2px 2px #000;
+    pointer-events: none;
+}

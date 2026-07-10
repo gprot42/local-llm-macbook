@@ -1,0 +1,49 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "diffusiongemma/diffusiongemma-26b-a4b-it-bf16",
+  "agent": {
+    "build": {
+      "temperature": 0,
+      "top_p": 1,
+      "steps": 48
+    },
+    "plan": {
+      "temperature": 0,
+      "top_p": 1,
+      "steps": 48
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "bash": "allow"
+  },
+  "provider": {
+    "diffusiongemma": {
+      "name": "DiffusionGemma MLX (local)",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://localhost:8080/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "diffusiongemma-26b-a4b-it-bf16": {
+          "name": "DiffusionGemma 26B A4B IT (vision + text)",
+          "attachment": true,
+          "tool_call": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          }
+        }
+      }
+    }
+  }
+}

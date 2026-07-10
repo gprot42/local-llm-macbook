@@ -1,0 +1,7 @@
+data: {"id":"chatcmpl-txt1","object":"chat.completion.chunk","model":"gemma-4","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-txt1","object":"chat.completion.chunk","model":"gemma-4","choices":[{"index":0,"delta":{"content":"Paris is the capital of France."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-txt1","object":"chat.completion.chunk","model":"gemma-4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]

@@ -1,0 +1,370 @@
+# =============================================================================
+# local-llm-macbook — comprehensive .gitignore
+# Covers MLX / Hugging Face / Ollama model stacks, Python, macOS, editors.
+# Model weights are downloaded via setup scripts; never commit them.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Model weights & checkpoints (large binaries)
+# -----------------------------------------------------------------------------
+*.safetensors
+*.gguf
+*.ggml
+*.ggmlv3
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.pickle
+*.joblib
+*.onnx
+*.ot
+*.msgpack
+*.h5
+*.hdf5
+*.npz
+*.npz2
+*.npz.index
+*.tfrecord
+*.tflite
+*.pb
+*.mlmodel
+*.mlpackage
+*.weights
+*.npz.data-*
+*.npz-0000*-of-0000*
+
+# Directory-style weight dumps (Ollama / custom layout)
+weights/
+**/weights/
+
+# Hugging Face / MLX model checkout dirs (name patterns of *downloaded* models).
+# Avoid globs that match project folders (e.g. qwen3-6-27b-coder-mtplx,
+# gemma4-server-*) on case-insensitive macOS filesystems.
+**/gemma-4-*/
+# Stock HF dirs like gemma-3-27b-it / gemma-2-9b — not gemma4-server-* (no hyphen after gemma)
+**/gemma-[0-9]-*/
+**/diffusiongemma-*/
+**/deepseek-v4-flash-2bit-dq/
+# Do not use **/Qwen* or **/qwen3* — macOS case-folding matches project dirs
+# like qwen3-6-27b-coder-mtplx. Weight files are covered by *.safetensors etc.
+
+# Explicit model roots used in this monorepo (belt-and-suspenders)
+**/deepseek-v4-flash-2bit-dq/
+**/diffusiongemma-26b-a4b-it-bf16/
+**/gemma-4-*/
+**/ornith-1.0-35b-q8-gguf-ollama/weights/
+# mtplx / HF downloads for the Qwen coding stack (inside project dir)
+**/qwen3-6-27b-coder-mtplx/**/models/
+**/qwen3-6-27b-coder-mtplx/**/checkpoints/
+
+# Legacy layout paths (older folder names)
+gemma4-server-uncensored-mlx/gemma-*/
+ollama-gemma4-server/gemma-*/
+ollama-gemma4-server/weights/
+ollama/*.gguf
+ollama/*.bin
+
+
+# -----------------------------------------------------------------------------
+# Hugging Face / transformers / hub caches
+# -----------------------------------------------------------------------------
+.cache/
+**/.cache/
+.huggingface/
+**/.huggingface/
+hf_cache/
+hub/
+snapshots/
+blobs/
+refs/
+# HF partial downloads
+*.incomplete
+*.safetensors.lock
+*.gguf.lock
+*.bin.lock
+
+
+# -----------------------------------------------------------------------------
+# MLX / Apple ML runtime artefacts
+# -----------------------------------------------------------------------------
+.mlx/
+**/.mlx/
+mlx_cache/
+*.metal
+# Compiled Metal / MPS scratch (if ever placed in-tree)
+compile_cache/
+
+
+# -----------------------------------------------------------------------------
+# Ollama local artefacts (models normally live in ~/.ollama)
+# -----------------------------------------------------------------------------
+.ollama/
+**/.ollama/
+Modelfile.generated
+.ollama.Modelfile
+.ornith35b_config
+*.Modelfile.local
+
+
+# -----------------------------------------------------------------------------
+# Python — virtualenvs, bytecode, packaging
+# -----------------------------------------------------------------------------
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+virtualenv/
+.python-version
+# Bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+# Packaging / install
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+develop-eggs/
+downloads/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+pip-wheel-metadata/
+*.whl
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+# Unit test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pytype/
+.pyre/
+.tox/
+.nox/
+.hypothesis/
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+.cache/pytest/
+nosetests.xml
+# Jupyter
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+*.ipynb_checkpoints
+# IPython
+profile_default/
+ipython_config.py
+# Tool-local only (keep intentional lockfiles like poetry.lock / uv.lock if added)
+.pdm-python
+.pdm-build/
+
+
+# -----------------------------------------------------------------------------
+# Test / server runtime output (generated, not source)
+# -----------------------------------------------------------------------------
+# pytest / custom reports
+**/tests/reports/
+**/test-results/
+**/test_output/
+# SSE / HTTP replay captures (if large or machine-local)
+# Keep fixtures/; only ignore live capture dumps under replays if present
+**/replays/*.json
+**/replays/*.sse
+**/replays/*.bin
+# Server lifecycle markers used by start scripts
+.server-starting
+**/.server-starting
+*.pid
+*.pid.lock
+
+
+# -----------------------------------------------------------------------------
+# Node / frontend tooling (mario-clone, small demos)
+# -----------------------------------------------------------------------------
+node_modules/
+.npm/
+.yarn/
+.pnp.*
+.yarn-integrity
+*.tgz
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.turbo/
+.next/
+.nuxt/
+.out/
+dist-ssr/
+
+
+# -----------------------------------------------------------------------------
+# Logs, temp, backup, OS swap
+# -----------------------------------------------------------------------------
+*.log
+logs/
+log/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.swp
+*.swo
+*~
+*.sw?
+tmp/
+temp/
+.tmp/
+.temp/
+
+
+# -----------------------------------------------------------------------------
+# Secrets & credentials — never commit
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+*.secret
+secrets/
+secrets.json
+credentials/
+credentials.json
+**/service-account*.json
+**/google-credentials*.json
+.aws/
+.azure/
+.gcloud/
+auth.json
+token.json
+*.keystore
+
+
+# -----------------------------------------------------------------------------
+# macOS
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+.DocumentRevisions-V100
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+Icon?
+
+
+# -----------------------------------------------------------------------------
+# Editors & IDEs
+# -----------------------------------------------------------------------------
+# VS Code / Cursor / Kilo Code (local workspace state)
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.cursor/
+.history/
+*.code-workspace
+.kilo/
+# Continue.dev local state (config scripts may write under home; ignore in-tree copies)
+.continue/
+# JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+# Vim / Emacs / Sublime
+*.sublime-project
+*.sublime-workspace
+.sublime-project
+.sublime-workspace
+\#*\#
+.\#*
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+# Zed
+.zed/
+# Claude / AI agent local session dumps in-tree
+.claude/
+.agent/
+.grok/
+
+
+# -----------------------------------------------------------------------------
+# Git / tooling noise
+# -----------------------------------------------------------------------------
+*.orig
+*.rej
+*.BASE.*
+*.LOCAL.*
+*.REMOTE.*
+*.BACKUP.*
+# Graphite / stacked PR local state
+.graphite*
+# direnv
+.envrc.local
+
+
+# -----------------------------------------------------------------------------
+# Archives & disk images (accidental dumps)
+# -----------------------------------------------------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.dmg
+*.iso
+*.img
+
+
+# -----------------------------------------------------------------------------
+# Keep intentional small assets (override aggressive patterns if needed)
+# -----------------------------------------------------------------------------
+# Example test image used by DiffusionGemma setup (tiny PNG fixture)
+!diffusiongemma4-26b-a4b-mlx/test-images/**
+!**/tests/fixtures/**
+!**/.env.example
+!**/.env.sample
+!**/.env.template

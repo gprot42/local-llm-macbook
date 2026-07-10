@@ -1,0 +1,44 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "mtplx/qwen3.6-27b-mtplx",
+  "agent": {
+    "build": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "plan": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "bash": "allow"
+  },
+  "provider": {
+    "mtplx": {
+      "name": "mtplx Qwen3.6 (local MTP)",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://localhost:8765/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "qwen3.6-27b-mtplx": {
+          "name": "Qwen3.6 27B — mtplx MTP (2.24× speedup, ~63 tok/s on M5 Max)",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        }
+      }
+    }
+  }
+}

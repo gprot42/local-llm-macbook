@@ -1,0 +1,4 @@
+# Written by 1_setup.sh — do not edit manually
+HF_MODEL="Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed"
+MODEL_ALIAS="qwen3.6-27b-mtplx"
+MODEL_SIZE="27b"

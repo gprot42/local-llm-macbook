@@ -1,0 +1,104 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ornith/ornith-1.0-35b-q8",
+  "small_model": "ornith/ornith-1.0-35b-q8",
+  "default_agent": "build",
+  "shell": "/bin/bash",
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "grep": "allow",
+    "glob": "allow",
+    "list": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "skill": "allow",
+    "todowrite": "allow",
+    "lsp": "allow",
+    "task": "allow",
+    "question": "allow",
+    "bash": {
+      "*": "allow",
+      "rm -rf /*": "deny",
+      "rm -rf ~/*": "deny",
+      "sudo *": "ask"
+    },
+    "external_directory": {
+      "*": "ask",
+      "/tmp/**": "allow",
+      "~/.cache/**": "allow"
+    }
+  },
+  "lsp": true,
+  "formatter": true,
+  "compaction": {
+    "auto": true,
+    "prune": true
+  },
+  "skills": {
+    "paths": [
+      "~/.grok/skills"
+    ]
+  },
+  "agent": {
+    "build": {
+      "temperature": 0.2,
+      "prompt": "You are an agentic coding assistant in OpenCode. Your first action on any coding request must be a write or edit tool call — never reply with only a plan or description. Use write/edit for files and bash only when execution is required. Do not use todo lists. Do not say what you will do; do it immediately with tools.",
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "grep": "allow",
+        "glob": "allow",
+        "list": "allow",
+        "webfetch": "allow",
+        "skill": "allow",
+        "todowrite": "deny",
+        "lsp": "allow",
+        "task": "allow"
+      }
+    },
+    "plan": {
+      "permission": {
+        "bash": "ask",
+        "edit": "deny"
+      }
+    }
+  },
+  "provider": {
+    "ornith": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ornith (local Ollama GGUF)",
+      "options": {
+        "baseURL": "http://127.0.0.1:18082/v1",
+        "apiKey": "EMPTY",
+        "timeout": false,
+        "chunkTimeout": 900000
+      },
+      "models": {
+        "ornith-1.0-35b-q8": {
+          "name": "Ornith-1.0-35B Q8_0 — max quality (~37 GB)",
+          "reasoning": true,
+          "interleaved": {
+            "field": "reasoning_content"
+          },
+          "tool_call": true,
+          "temperature": true,
+          "limit": {
+            "context": 131072,
+            "output": 131072
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          },
+          "options": {
+            "topP": 0.95,
+            "enable_thinking": true,
+            "temperature": 0.2
+          }
+        }
+      }
+    }
+  }
+}

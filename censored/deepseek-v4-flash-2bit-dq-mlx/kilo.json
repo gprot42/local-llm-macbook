@@ -1,0 +1,50 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "deepseek-mlx/deepseek-v4-flash-2bit-dq",
+  "agent": {
+    "build": {
+      "temperature": 1.0,
+      "top_p": 1.0
+    },
+    "plan": {
+      "temperature": 1.0,
+      "top_p": 1.0
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "bash": "allow"
+  },
+  "provider": {
+    "deepseek-mlx": {
+      "name": "DeepSeek MLX (local)",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://127.0.0.1:8082/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "deepseek-v4-flash-2bit-dq": {
+          "name": "DeepSeek V4 Flash 2bit-DQ (284B MoE, ~97 GB) \u2014 quality>speed coding/agents",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        },
+        "deepseek-r1-distill-qwen-32b-4bit": {
+          "name": "DeepSeek R1 Distill Qwen 32B 4bit (~18 GB) \u2014 fast reasoning",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        }
+      }
+    }
+  }
+}

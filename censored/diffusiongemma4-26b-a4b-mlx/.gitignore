@@ -1,0 +1,70 @@
+# ── Downloaded model weights (~52 GB) ────────────────────────────────────────
+# Download via: ./1_setup_download.sh
+diffusiongemma-26b-a4b-it-bf16/
+diffusiongemma-*/
+*.safetensors
+*.gguf
+*.ggml
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.onnx
+
+# Hugging Face cache / snapshot dirs
+.cache/
+hf_cache/
+hub/
+snapshots/
+blobs/
+refs/
+.huggingface/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ── Editor artefacts ─────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.history/
+
+# ── Logs / temp ──────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+tmp/
+temp/
+.server-starting
+
+# ── Secrets / credentials ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.token
+secrets/
+credentials/

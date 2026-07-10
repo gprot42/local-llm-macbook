@@ -1,0 +1,44 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "ornith/ornith-1.0-35b-q8",
+  "agent": {
+    "build": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "plan": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "bash": "allow"
+  },
+  "provider": {
+    "ornith": {
+      "name": "Ornith-1.0-35B (Ollama GGUF)",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://127.0.0.1:18082/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "ornith-1.0-35b-q8": {
+          "name": "Ornith-1.0-35B Q8_0 — max quality (~37 GB)",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 65536
+          }
+        }
+      }
+    }
+  }
+}
