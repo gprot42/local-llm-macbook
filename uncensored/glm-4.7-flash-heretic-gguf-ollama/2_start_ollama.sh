@@ -16,7 +16,7 @@
 #   --ollama-port N   Ollama HTTP port (default: 11434)
 #   --proxy-port N    Harness proxy port (default: 18083)
 #   --ctx-size N      Context window passed to Ollama (default: 131072)
-#   --quant q4|q5|q6|q8   Override quant (default q6; reads .glm47_config)
+#   --quant q4|q5|q6|q8   Override quant (default q8; reads .glm47_config)
 #   --temp T          Sampling temperature (default: 0.6)
 #   --greedy          Shorthand for --temp 0
 #   --no-proxy        Talk to Ollama directly (skip proxy)
@@ -205,7 +205,7 @@ echo "→ Validating model weights..."
 if ! python3 "$VALIDATE" "$MODEL_PATH"; then
     echo ""
     echo "ERROR: model weights failed validation: $MODEL_PATH"
-    echo "       Run: ./1_setup_download.sh ${QUANT_OVERRIDE:-q6}"
+    echo "       Run: ./1_setup_download.sh ${QUANT_OVERRIDE:-${QUANT:-q8}}"
     exit 1
 fi
 echo ""

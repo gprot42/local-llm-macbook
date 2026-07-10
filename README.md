@@ -9,7 +9,6 @@ Status: 🟢 working · 🟡 partial / flaky
 | Role | Model | Directory | API |
 |------|--------|-----------|-----|
 | **Default coding** | 🟢 Qwen 3.6 27B (mtplx MTP) | [`qwen3-6-27b-coder-mtplx/`](qwen3-6-27b-coder-mtplx/) | `:8765/v1` |
-| **Heavy coding** (128 GB) | 🟡 DeepSeek V4 Flash 2bit-DQ | [`deepseek-v4-flash-2bit-dq-mlx/`](deepseek-v4-flash-2bit-dq-mlx/) | `:8082/v1` |
 | Stock Gemma | 🟢 Gemma 4 31B IT | [`gemma4-server-mlx-31b/`](gemma4-server-mlx-31b/) | `:8080/v1` |
 | Multimodal / research | 🟢 DiffusionGemma 26B | [`diffusiongemma4-26b-a4b-mlx/`](diffusiongemma4-26b-a4b-mlx/) | `:8080/v1` |
 | Guided agent trials | 🟢 Ornith 1.0 35B Q8 | [`ornith-1.0-35b-q8-gguf-ollama/`](ornith-1.0-35b-q8-gguf-ollama/) | `:18082/v1` |
@@ -21,7 +20,7 @@ Status: 🟢 working · 🟡 partial / flaky
 | **Uncensored chat** | 🟢 Gemma 4 31B Heretic | [`gemma4-server-uncensored-31b-mlx/`](gemma4-server-uncensored-31b-mlx/) | `:8080/v1` |
 | Uncensored MoE (Ollama) | 🟢 GLM-4.7-Flash Heretic | [`glm-4.7-flash-heretic-gguf-ollama/`](glm-4.7-flash-heretic-gguf-ollama/) | `:18083/v1` |
 
-**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek, Qwen, Ornith, and GLM can run together.
+**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. Qwen, Ornith, and GLM can run together.
 
 ---
 
@@ -47,7 +46,6 @@ Other stacks: `1_*` setup/download → `2_*` start → pick that stack’s model
 | Goal | Use | Avoid when |
 |------|-----|------------|
 | Snappy Kilo tool loops | 🟢 **Qwen 3.6** | Uncensored needs; frontier-level greenfield apps |
-| Hard multi-file / SWE-style (128 GB) | 🟡 **DeepSeek V4 Flash** | You need snappy loops; RAM ≪ 128 GB |
 | Aligned Gemma 31B | 🟢 **Gemma stock IT** | Same limits as Heretic for heavy agents |
 | Diffusion / vision experiments | 🟢 **DiffusionGemma** | Coding or reliable tool use |
 | Guided Ollama agent trials | 🟢 **Ornith** | Fast iteration; unattended large tasks |
@@ -59,7 +57,7 @@ Other stacks: `1_*` setup/download → `2_*` start → pick that stack’s model
 | Uncensored / low-refusal chat | 🟢 **Gemma Heretic** | Unattended big multi-file builds |
 | Uncensored MoE coding (Ollama) | 🟢 **GLM-4.7 Flash Heretic** | Need vision; prefer MLX Gemma for chat UI polish |
 
-**RAM:** ~128 GB → all stacks. ~80 GB → skip full DeepSeek 2bit-DQ. ≤64 GB → Qwen and smaller only. Don’t load two huge models at once.
+**RAM:** ~128 GB → all stacks. ≤64 GB → Qwen and smaller only. Don’t load two huge models at once.
 
 **Latency:** speculative decode helps generation, not prefill. Long Kilo histories still cost a large first token — compact or restart when context balloons ([Qwen README](qwen3-6-27b-coder-mtplx/README.md)).
 
@@ -74,7 +72,6 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 | | Provider | Base URL | Model ID |
 |---|----------|----------|----------|
 | 🟢 | `mtplx` | `http://localhost:8765/v1` | `mtplx/qwen3.6-27b-mtplx` |
-| 🟡 | `deepseek-mlx` | `http://localhost:8082/v1` | `deepseek-mlx/deepseek-v4-flash-2bit-dq` |
 | 🟢 | `diffusiongemma` | `http://localhost:8080/v1` | `diffusiongemma/diffusiongemma-26b-a4b-it-bf16` |
 | 🟢 | `ornith` | `http://127.0.0.1:18082/v1` | `ornith/ornith-1.0-35b-q8` |
 
@@ -83,7 +80,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 | | Provider | Base URL | Model ID |
 |---|----------|----------|----------|
 | 🟢 | `openai-compatible` | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` |
-| 🟢 | `glm` | `http://127.0.0.1:18083/v1` | `glm/glm-4.7-flash-heretic-q6` |
+| 🟢 | `glm` | `http://127.0.0.1:18083/v1` | `glm/glm-4.7-flash-heretic-q8` |
 
 **Image attach (Kilo 7.3.x):** paperclip often missing — use Cmd+V, Shift+drag, or `@` → Attach. Need a vision model + its server. See [README-diffusiongemma4.md](README-diffusiongemma4.md).
 
@@ -94,7 +91,6 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 **Censored (aligned)**
 
 - [qwen3-6-27b-coder-mtplx/README.md](qwen3-6-27b-coder-mtplx/README.md) — mtplx MTP, latency vs context  
-- [deepseek-v4-flash-2bit-dq-mlx/README.md](deepseek-v4-flash-2bit-dq-mlx/README.md) — V4 Flash / community mlx-lm  
 - [README-diffusiongemma4.md](README-diffusiongemma4.md) · [ornith README](ornith-1.0-35b-q8-gguf-ollama/README.md)
 
 **Uncensored**
@@ -110,10 +106,9 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 |---------|-----|
 | `Cannot connect to API` | Start that provider’s server; check with `curl` |
 | Wrong model / blank Base URL | Match `kilo.json` model ID + `baseURL` to the running server |
-| OOM | Prefer Qwen 27B; DeepSeek 2bit-DQ wants ~128 GB |
+| OOM | Prefer Qwen 27B or smaller quantizations |
 | Port in use | Stop the other stack or change `--port` |
 | Kilo hangs / bad tool markup (Gemma) | Use Heretic start **with** proxy + gemma4 parsers; don’t enable Kilo “reasoning” unless the server is started for thinking |
-| DeepSeek slow first token | Expected (load/prefill) — not a snappy tool-loop model |
 | Ornith empty replies | Use the tool proxy (default); thinking can burn `max_tokens` |
 | Vision only in CLI, not Kilo | Use the **server** path + vision model ID |
 | Qwen fast in curl, slow in Kilo | Prefill/context — compact the session ([Qwen README](qwen3-6-27b-coder-mtplx/README.md)) |

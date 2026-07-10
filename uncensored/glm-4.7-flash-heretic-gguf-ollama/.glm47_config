@@ -1,6 +1,6 @@
 # Written by 1_setup_download.sh — do not edit manually
 HF_REPO="DavidAU/GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF"
-QUANT="q6"
-GGUF_FILE="GLM-4.7-Flash-Uncen-Hrt-NEO-CODE-MAX-imat-D_AU-Q6_K.gguf"
-MODEL_PATH="/Users/aicoder/src/local-llm-macbook/uncensored/glm-4.7-flash-heretic-gguf-ollama/weights/GLM-4.7-Flash-Uncen-Hrt-NEO-CODE-MAX-imat-D_AU-Q6_K.gguf"
-MODEL_ID="glm-4.7-flash-heretic-q6"
+QUANT="q8"
+GGUF_FILE="GLM-4.7-Flash-Uncen-Hrt-NEO-CODE-MAX-imat-D_AU-Q8_0.gguf"
+MODEL_PATH="/Users/aicoder/src/local-llm-macbook/uncensored/glm-4.7-flash-heretic-gguf-ollama/weights/GLM-4.7-Flash-Uncen-Hrt-NEO-CODE-MAX-imat-D_AU-Q8_0.gguf"
+MODEL_ID="glm-4.7-flash-heretic-q8"

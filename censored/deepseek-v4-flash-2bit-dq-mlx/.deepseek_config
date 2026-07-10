@@ -1,6 +1,0 @@
-# Written by 1_setup_download.sh — do not edit manually
-HF_REPO="mlx-community/DeepSeek-V4-Flash-2bit-DQ"
-MODEL_DIR="/Users/aicoder/src/local-llm-macbook/censored/deepseek-v4-flash-2bit-dq-mlx/deepseek-v4-flash-2bit-dq"
-MODEL_ID="deepseek-v4-flash-2bit-dq"
-MODEL_CHOICE="v4-flash"
-MLX_LM_GIT_URL="git+https://github.com/spicyneuron/mlx-lm.git@_ds4"
