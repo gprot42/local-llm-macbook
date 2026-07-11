@@ -67,7 +67,7 @@ echo ""
 
 # ── Repair venv after project directory rename/move ──────────────────────────
 # Console-script shebangs and activate embed absolute paths. If this folder was
-# renamed (e.g. uncensored-mlx-31b → uncensored-31b-mlx), rewrite them in place.
+# renamed (e.g. uncensored-31b-mlx → heretic-31b-mlx), rewrite them in place.
 repair_relocated_venv() {
     local venv="$SCRIPT_DIR/venv"
     [[ -d "$venv/bin" ]] || return 0

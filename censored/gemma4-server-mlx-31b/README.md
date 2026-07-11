@@ -84,7 +84,7 @@ kilo                # terminal 2 — same directory
 | Reasoning | **Off** in UI | Checked → infinite `<thinking>` loops |
 
 > For heavier agent tuning (proxy, fuzzy edits, Heretic model), use
-> `gemma4-server-uncensored-mlx`. For coding speed on Qwen, use `qwen3-6-27b-coder-mtplx`.
+> `gemma4-server-heretic-31b-mlx`. For coding speed on Qwen, use `qwen3-6-27b-coder-mtplx`.
 
 ## Options
 

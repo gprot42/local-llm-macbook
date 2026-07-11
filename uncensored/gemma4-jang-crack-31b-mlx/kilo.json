@@ -1,0 +1,42 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "openai-compatible/gemma-4-31b-jang-crack-mlx",
+  "agent": {
+    "build": {
+      "temperature": 0.35,
+      "top_p": 0.95
+    },
+    "plan": {
+      "temperature": 0.15,
+      "top_p": 0.95
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "bash": "allow"
+  },
+  "provider": {
+    "openai-compatible": {
+      "options": {
+        "baseURL": "http://localhost:8080/v1"
+      },
+      "models": {
+        "gemma-4-31b-jang-crack-mlx": {
+          "name": "🟡 gemma-4-31b-jang-crack-mlx — JANG_4M CRACK (MLX); Kilo may filter, limited usefulness",
+          "attachment": true,
+          "tool_call": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        }
+      }
+    }
+  }
+}

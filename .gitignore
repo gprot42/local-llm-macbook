@@ -61,7 +61,7 @@ weights/
 **/qwen3-6-27b-coder-mtplx/**/checkpoints/
 
 # Legacy layout paths (older folder names)
-gemma4-server-uncensored-mlx/gemma-*/
+gemma4-server-heretic-31b-mlx/gemma-*/
 ollama-gemma4-server/gemma-*/
 ollama-gemma4-server/weights/
 ollama/*.gguf

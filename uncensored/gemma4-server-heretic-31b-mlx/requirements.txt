@@ -1,0 +1,13 @@
+# Pinned stack for Gemma 4 31B Heretic + vllm-mlx.
+# mlx-vlm>=0.5.0: Gemma4 BatchKVCache RoPE offset + thread-local MLX streams.
+# vllm-mlx>=0.4.0: gemma4_text TextModel dispatch + logit_bias (was local patches on 0.3.x).
+# transformers: mlx-vlm 0.6.x requires transformers>=5.5,<5.13 — do not bump to 5.13 yet.
+vllm-mlx>=0.4.0,<0.5
+mlx-vlm>=0.5.0,<0.7
+mlx-lm>=0.31.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
+httpx>=0.27.0
+huggingface_hub>=0.23.0
+transformers>=5.5.0,<5.13.0
+pytest>=7.0.0

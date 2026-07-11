@@ -1,4 +1,4 @@
-# Developer Notes — gemma4-server-uncensored-mlx-31b
+# Developer Notes — gemma4-server-heretic-31b-mlx
 
 Diagnosed bugs, root causes, and **lean** proxy workarounds in
 `gemma4_mlx_kilo_proxy.py` (~1.6k lines; rewritten from a ~10k-line special-case

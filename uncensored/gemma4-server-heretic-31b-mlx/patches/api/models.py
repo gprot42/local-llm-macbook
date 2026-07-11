@@ -1,0 +1,553 @@
+# SPDX-License-Identifier: Apache-2.0
+"""
+Pydantic models for OpenAI-compatible API.
+
+These models define the request and response schemas for:
+- Chat completions
+- Text completions
+- Tool calling
+- MCP (Model Context Protocol) integration
+"""
+
+import time
+import uuid
+from typing import Any
+
+from pydantic import AliasChoices, BaseModel, Field, model_serializer
+
+# =============================================================================
+# Content Types (for multimodal messages)
+# =============================================================================
+
+
+class ImageUrl(BaseModel):
+    """Image URL with optional detail level."""
+
+    url: str
+    detail: str | None = None
+
+
+class VideoUrl(BaseModel):
+    """Video URL."""
+
+    url: str
+
+
+class AudioUrl(BaseModel):
+    """Audio URL for audio content."""
+
+    url: str
+
+
+class ContentPart(BaseModel):
+    """
+    A part of a multimodal message content.
+
+    Supports:
+    - text: Plain text content
+    - image_url: Image from URL or base64
+    - video: Video from local path
+    - video_url: Video from URL or base64
+    - audio_url: Audio from URL or base64
+    """
+
+    type: str  # "text", "image_url", "video", "video_url", "audio_url"
+    text: str | None = None
+    image_url: ImageUrl | dict | str | None = None
+    video: str | None = None
+    video_url: VideoUrl | dict | str | None = None
+    audio_url: AudioUrl | dict | str | None = None
+
+
+# =============================================================================
+# Messages
+# =============================================================================
+
+
+class Message(BaseModel):
+    """
+    A message in a chat conversation.
+
+    Supports:
+    - Simple text messages (role + content string)
+    - Multimodal messages (role + content list with text/images/videos)
+    - Tool call messages (assistant with tool_calls)
+    - Tool response messages (role="tool" with tool_call_id)
+    """
+
+    role: str
+    content: str | list[ContentPart] | list[dict] | None = None
+    # For assistant messages with tool calls
+    tool_calls: list[dict] | None = None
+    # For tool response messages (role="tool")
+    tool_call_id: str | None = None
+
+
+# =============================================================================
+# Tool Calling
+# =============================================================================
+
+
+class FunctionCall(BaseModel):
+    """A function call with name and arguments."""
+
+    name: str
+    arguments: str  # JSON string
+
+
+class ToolCall(BaseModel):
+    """A tool call from the model."""
+
+    id: str
+    type: str = "function"
+    function: FunctionCall
+
+
+class ToolDefinition(BaseModel):
+    """Definition of a tool that can be called by the model."""
+
+    type: str = "function"
+    function: dict
+
+
+# =============================================================================
+# Structured Output (JSON Schema)
+# =============================================================================
+
+
+class ResponseFormatJsonSchema(BaseModel):
+    """JSON Schema definition for structured output."""
+
+    name: str
+    description: str | None = None
+    schema_: dict = Field(alias="schema")  # JSON Schema specification
+    strict: bool | None = False
+
+    class Config:
+        populate_by_name = True
+
+
+class ResponseFormat(BaseModel):
+    """
+    Response format specification for structured output.
+
+    Supports:
+    - "text": Default text output (no structure enforcement)
+    - "json_object": Forces valid JSON output
+    - "json_schema": Forces JSON matching a specific schema
+    """
+
+    type: str = "text"  # "text", "json_object", "json_schema"
+    json_schema: ResponseFormatJsonSchema | None = None
+
+
+# =============================================================================
+# Chat Completion
+# =============================================================================
+
+
+class StreamOptions(BaseModel):
+    """Options for streaming responses."""
+
+    include_usage: bool = False  # Include usage stats in final chunk
+
+
+class ChatCompletionRequest(BaseModel):
+    """Request for chat completion."""
+
+    model: str
+    messages: list[Message]
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    presence_penalty: float | None = None
+    max_tokens: int | None = Field(default=None, gt=0)
+    stream: bool = False
+    stream_options: StreamOptions | None = (
+        None  # Streaming options (include_usage, etc.)
+    )
+    stop: list[str] | None = None
+    # Tool calling
+    tools: list[ToolDefinition] | None = None
+    tool_choice: str | dict | None = None  # "auto", "none", or specific tool
+    # Structured output
+    response_format: ResponseFormat | dict | None = None
+    # Extra kwargs forwarded to tokenizer.apply_chat_template
+    chat_template_kwargs: dict[str, Any] | None = None
+    # MLLM-specific parameters
+    video_fps: float | None = None
+    video_max_frames: int | None = None
+    # Sampling penalties
+    repetition_penalty: float | None = None  # mlx-lm style (>1.0 penalizes)
+    # Request timeout in seconds (None = use server default)
+    timeout: float | None = None
+    # SpecPrefill: per-request enable/disable (None = server decides)
+    specprefill: bool | None = None
+    # SpecPrefill: per-request keep percentage (0.0-1.0, None = use server default)
+    specprefill_keep_pct: float | None = None
+    # Enable/disable thinking mode (None = server default, typically True)
+    enable_thinking: bool | None = None
+    # Thinking token budget: cap reasoning tokens by forcing </think> when
+    # budget exhausted (None = no budget, unlimited reasoning)
+    thinking_token_budget: int | None = Field(default=None, gt=0)
+    # OpenAI-compatible token-level logit bias.  Keys are token IDs (as
+    # strings, per OpenAI spec) and values are additive bias in [-100, 100].
+    # -100 effectively bans a token.  Wired through to
+    # `mlx_lm.sample_utils.make_logits_processors(logit_bias=...)`.  Added
+    # by the local proxy patch to let the Kilo/Continue steering layer
+    # suppress Harmony control tokens (e.g. `<|channel>`, `<|think|>`) that
+    # the gemma-4-heretic finetune occasionally emits as a "channel" prefix
+    # before a tool call -- those leaks break the upstream tool parser.
+    logit_bias: dict[str, float] | None = None
+
+
+class AssistantMessage(BaseModel):
+    """Response message from the assistant."""
+
+    role: str = "assistant"
+    content: str | None = None
+    reasoning_content: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("reasoning_content", "reasoning"),
+    )
+    tool_calls: list[ToolCall] | None = None
+
+    @property
+    def reasoning(self) -> str | None:
+        return self.reasoning_content
+
+    @model_serializer
+    def _serialize(self) -> dict:
+        """Serialize with OpenAI-compatible schema.
+
+        - ``tool_calls`` and ``reasoning_content`` are omitted when None.
+        - ``content`` is always included (even as null) per OpenAI spec.
+        """
+        d: dict = {"role": self.role, "content": self.content}
+        if self.reasoning_content is not None:
+            d["reasoning_content"] = self.reasoning_content
+        if self.tool_calls is not None:
+            d["tool_calls"] = [tc.model_dump() for tc in self.tool_calls]
+        return d
+
+
+class ChatCompletionChoice(BaseModel):
+    """A single choice in chat completion response."""
+
+    index: int = 0
+    message: AssistantMessage
+    finish_reason: str | None = "stop"
+
+
+class Usage(BaseModel):
+    """Token usage statistics."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class ChatCompletionResponse(BaseModel):
+    """Response for chat completion."""
+
+    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4().hex[:8]}")
+    object: str = "chat.completion"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str
+    choices: list[ChatCompletionChoice]
+    usage: Usage = Field(default_factory=Usage)
+
+
+# =============================================================================
+# Text Completion
+# =============================================================================
+
+
+class CompletionRequest(BaseModel):
+    """Request for text completion."""
+
+    model: str
+    prompt: str | list[str]
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    presence_penalty: float | None = None
+    max_tokens: int | None = Field(default=None, gt=0)
+    stream: bool = False
+    stop: list[str] | None = None
+    # Sampling penalties
+    repetition_penalty: float | None = None  # mlx-lm style (>1.0 penalizes)
+    # Request timeout in seconds (None = use server default)
+    timeout: float | None = None
+    # SpecPrefill: per-request enable/disable (None = server decides)
+    specprefill: bool | None = None
+    # SpecPrefill: per-request keep percentage (0.0-1.0, None = use server default)
+    specprefill_keep_pct: float | None = None
+
+
+class CompletionChoice(BaseModel):
+    """A single choice in text completion response."""
+
+    index: int = 0
+    text: str
+    finish_reason: str | None = "stop"
+
+
+class CompletionResponse(BaseModel):
+    """Response for text completion."""
+
+    id: str = Field(default_factory=lambda: f"cmpl-{uuid.uuid4().hex[:8]}")
+    object: str = "text_completion"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str
+    choices: list[CompletionChoice]
+    usage: Usage = Field(default_factory=Usage)
+
+
+# =============================================================================
+# Models List
+# =============================================================================
+
+
+class ModelInfo(BaseModel):
+    """Information about an available model."""
+
+    id: str
+    object: str = "model"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    owned_by: str = "vllm-mlx"
+
+
+class ModelsResponse(BaseModel):
+    """Response for listing models."""
+
+    object: str = "list"
+    data: list[ModelInfo]
+
+
+# =============================================================================
+# MCP (Model Context Protocol)
+# =============================================================================
+
+
+class MCPToolInfo(BaseModel):
+    """Information about an MCP tool."""
+
+    name: str
+    description: str
+    server: str
+    parameters: dict = Field(default_factory=dict)
+
+
+class MCPToolsResponse(BaseModel):
+    """Response for listing MCP tools."""
+
+    tools: list[MCPToolInfo]
+    count: int
+
+
+class MCPServerInfo(BaseModel):
+    """Information about an MCP server."""
+
+    name: str
+    state: str
+    transport: str
+    tools_count: int
+    error: str | None = None
+
+
+class MCPServersResponse(BaseModel):
+    """Response for listing MCP servers."""
+
+    servers: list[MCPServerInfo]
+
+
+class MCPExecuteRequest(BaseModel):
+    """Request to execute an MCP tool."""
+
+    tool_name: str
+    arguments: dict = Field(default_factory=dict)
+
+
+class MCPExecuteResponse(BaseModel):
+    """Response from executing an MCP tool."""
+
+    tool_name: str
+    content: str | list | dict | None = None
+    is_error: bool = False
+    error_message: str | None = None
+
+
+# =============================================================================
+# Audio (STT/TTS)
+# =============================================================================
+
+
+class AudioTranscriptionRequest(BaseModel):
+    """Request for audio transcription (STT)."""
+
+    model: str = "whisper-large-v3"
+    language: str | None = None
+    response_format: str = "json"
+    temperature: float = 0.0
+    timestamp_granularities: list[str] | None = None
+
+
+class AudioTranscriptionResponse(BaseModel):
+    """Response from audio transcription."""
+
+    text: str
+    language: str | None = None
+    duration: float | None = None
+    segments: list[dict] | None = None
+
+
+class AudioSpeechRequest(BaseModel):
+    """Request for text-to-speech."""
+
+    model: str = "kokoro"
+    input: str
+    voice: str = "af_heart"
+    speed: float = 1.0
+    response_format: str = "wav"
+
+
+class AudioSeparationRequest(BaseModel):
+    """Request for audio source separation."""
+
+    model: str = "htdemucs"
+    stems: list[str] = Field(default_factory=lambda: ["vocals", "accompaniment"])
+
+
+# =============================================================================
+# Embeddings
+# =============================================================================
+
+
+class EmbeddingRequest(BaseModel):
+    """Request for text embeddings (OpenAI compatible)."""
+
+    input: str | list[str]
+    model: str
+    encoding_format: str | None = "float"  # "float" or "base64"
+
+
+class EmbeddingData(BaseModel):
+    """A single embedding result."""
+
+    object: str = "embedding"
+    index: int
+    embedding: list[float]
+
+
+class EmbeddingUsage(BaseModel):
+    """Token usage for embedding requests."""
+
+    prompt_tokens: int = 0
+    total_tokens: int = 0
+
+
+class EmbeddingResponse(BaseModel):
+    """Response for embeddings endpoint (OpenAI compatible)."""
+
+    object: str = "list"
+    data: list[EmbeddingData]
+    model: str
+    usage: EmbeddingUsage = Field(default_factory=EmbeddingUsage)
+
+
+# =============================================================================
+# Reranking
+# =============================================================================
+
+
+class RerankRequest(BaseModel):
+    """Request for reranking documents against a query (Jina/Cohere convention)."""
+
+    model: str
+    query: str
+    documents: list[str | dict]
+    top_n: int | None = None
+    return_documents: bool = True
+
+
+class RerankResult(BaseModel):
+    """A single reranked document result."""
+
+    index: int
+    relevance_score: float
+    document: dict | None = None
+
+
+class RerankUsage(BaseModel):
+    """Token usage for rerank requests."""
+
+    total_tokens: int = 0
+
+
+class RerankResponse(BaseModel):
+    """Response for reranking endpoint (Jina/Cohere convention)."""
+
+    model: str
+    results: list[RerankResult]
+    usage: RerankUsage = Field(default_factory=RerankUsage)
+
+
+# =============================================================================
+# Streaming (for SSE responses)
+# =============================================================================
+
+
+class ChatCompletionChunkDelta(BaseModel):
+    """Delta content in a streaming chunk."""
+
+    role: str | None = None
+    content: str | None = None
+    reasoning_content: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("reasoning_content", "reasoning"),
+    )
+    tool_calls: list[dict] | None = None
+
+    @property
+    def reasoning(self) -> str | None:
+        return self.reasoning_content
+
+    @model_serializer
+    def _serialize(self) -> dict:
+        """Serialize delta with only non-None fields.
+
+        Per OpenAI streaming spec, delta objects only include fields that
+        carry new content.
+        """
+        d: dict = {}
+        if self.role is not None:
+            d["role"] = self.role
+        if self.content is not None:
+            d["content"] = self.content
+        if self.reasoning_content is not None:
+            d["reasoning_content"] = self.reasoning_content
+        if self.tool_calls is not None:
+            d["tool_calls"] = self.tool_calls
+        return d
+
+
+class ChatCompletionChunkChoice(BaseModel):
+    """A single choice in a streaming chunk."""
+
+    index: int = 0
+    delta: ChatCompletionChunkDelta
+    finish_reason: str | None = None
+
+
+class ChatCompletionChunk(BaseModel):
+    """A streaming chunk for chat completion."""
+
+    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4().hex[:8]}")
+    object: str = "chat.completion.chunk"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str
+    choices: list[ChatCompletionChunkChoice]
+    usage: Usage | None = None  # Included when stream_options.include_usage=true

@@ -4,7 +4,7 @@ Dedicated **31B Heretic** (uncensored / abliterated) setup via **vllm-mlx** on A
 
 | | |
 |---|---|
-| **Project dir** | `gemma4-server-uncensored-31b-mlx` |
+| **Project dir** | `gemma4-server-heretic-31b-mlx` |
 | **Model dir** | `gemma-4-31b-heretic-mlx-4bit` |
 | **HF repo** | [`mlx-community/gemma-4-31B-it-uncensored-heretic-4bit`](https://huggingface.co/mlx-community/gemma-4-31B-it-uncensored-heretic-4bit) |
 | **Size** | ~20 GB (4-bit) |
@@ -21,7 +21,7 @@ Dedicated **31B Heretic** (uncensored / abliterated) setup via **vllm-mlx** on A
 ## Quick start
 
 ```bash
-cd gemma4-server-uncensored-31b-mlx
+cd gemma4-server-heretic-31b-mlx
 
 # 1. Download Heretic language weights + stock vision (~2.3 GB) + graft + venv
 ./1_setup_download.sh
@@ -178,7 +178,7 @@ Verify:
 
 ```bash
 # Per-project (this folder)
-cd gemma4-server-uncensored-31b-mlx
+cd gemma4-server-heretic-31b-mlx
 ./2_start_mlx.sh   # terminal 1
 kilo                     # terminal 2
 
@@ -230,7 +230,7 @@ Kilo Code     →  “implement suggestion #3 from Continue”
 ### One-time setup
 
 ```bash
-cd gemma4-server-uncensored-31b-mlx
+cd gemma4-server-heretic-31b-mlx
 
 # Model must already be downloaded (./1_setup_download.sh)
 ./4_configure_continue_dev.sh            # write ~/.continue/config.json (proxy :8080)

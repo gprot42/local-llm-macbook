@@ -23,7 +23,7 @@ canvas block-by-block using Google's Entropy Bound (EB) sampler. The MLX port ru
 | Best use | Multimodal Q&A, image description, experimentation | Daily coding agent, tool use |
 
 > **For Kilo Code / agentic coding**, use
-> [gemma4-server-uncensored-31b-mlx/README.md](gemma4-server-uncensored-31b-mlx/README.md) or
+> [gemma4-server-heretic-31b-mlx/README.md](gemma4-server-heretic-31b-mlx/README.md) or
 > [qwen3-6-27b-coder-mtplx/README.md](qwen3-6-27b-coder-mtplx/README.md) instead.
 > DiffusionGemma works for simple tool calls (`ls`, `cat`) but often explains instead of acting
 > on complex agent prompts (todo lists, multi-file refactors).
@@ -347,6 +347,6 @@ Weights are gitignored. Re-download with `./1_setup_download.sh` on a fresh clon
 ## See Also
 
 - [README.md](README.md) — overview of all local LLM servers
-- [gemma4-server-uncensored-31b-mlx/README.md](gemma4-server-uncensored-31b-mlx/README.md) — Gemma 4 Heretic via vllm-mlx (preferred for agents)
+- [gemma4-server-heretic-31b-mlx/README.md](gemma4-server-heretic-31b-mlx/README.md) — Gemma 4 Heretic via vllm-mlx (preferred for agents)
 - [qwen3-6-27b-coder-mtplx/README.md](qwen3-6-27b-coder-mtplx/README.md) — Qwen3.6 coding with MTP
 - [Hugging Face model card](https://huggingface.co/google/diffusiongemma-26B-A4B-it)

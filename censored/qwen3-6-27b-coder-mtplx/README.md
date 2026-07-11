@@ -132,7 +132,7 @@ Valid profile names: `sustained` · `performance-cold` · `stable` · `exact` ·
 
 ## Comparison with Gemma 4 MLX setup
 
-| | `gemma4-server-uncensored-mlx` | `qwen3-6-27b-coder-mtplx` |
+| | `gemma4-server-heretic-31b-mlx` | `qwen3-6-27b-coder-mtplx` |
 |---|---|---|
 | Model | Gemma 4 26B Heretic (MoE) | Qwen3.6 27B or 35B-A3B |
 | MTP | No (Gemma 4 lacks MTP heads) | Yes — helps decode on short context; less impact on long agent turns |

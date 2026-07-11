@@ -126,7 +126,7 @@ old = '''def is_mllm_model(model_name: str) -> bool:
     if config is not None:
         return _config_indicates_vlm(config)
     return _check_legacy_string_patterns(model_name)'''
-        new = '''def _weights_are_text_only_vlm(model_name: str) -> bool:
+new = '''def _weights_are_text_only_vlm(model_name: str) -> bool:
     """True when config looks multimodal but weight shards have no vision/audio.
 
     Some abliterated / text-only conversions (e.g. Gemma 4 Heretic 4-bit)
@@ -207,10 +207,10 @@ def is_mllm_model(model_name: str) -> bool:
             return False
         return True
     return _check_legacy_string_patterns(model_name)'''
-        if old not in text:
-            raise SystemExit(f"is_mllm_model block not found in {path}")
-        path.write_text(text.replace(old, new, 1))
-        print(f"patched {path}", flush=True)
+if old not in text:
+    raise SystemExit(f"is_mllm_model block not found in {path}")
+path.write_text(text.replace(old, new, 1))
+print(f"patched {path}", flush=True)
 PY
         echo "   vllm_mlx/api/utils.py (text-only VLM → LLM load path)"
     fi
