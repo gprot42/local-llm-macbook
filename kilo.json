@@ -130,7 +130,7 @@
       }
     },
     "ds4": {
-      "name": "DwarfStar ds4 (DeepSeek V4 native Metal)",
+      "name": "DwarfStar ds4 (DeepSeek V4 native Metal + agent proxy)",
       "options": {
         "apiKey": "local",
         "baseURL": "http://127.0.0.1:8083/v1",
@@ -140,11 +140,11 @@
       },
       "models": {
         "deepseek-v4-flash": {
-          "name": "DeepSeek V4 Flash (ds4 q2-imatrix, ~81 GB) \u2014 native Metal + tools",
+          "name": "DeepSeek V4 Flash (ds4 q2-imatrix) \u2014 agent proxy, thinking off, tools",
           "tool_call": true,
           "limit": {
             "context": 100000,
-            "output": 32768
+            "output": 8192
           }
         }
       }

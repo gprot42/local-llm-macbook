@@ -1,6 +1,8 @@
 # Agent rules — local-llm-macbook
 
-Local models (especially DeepSeek V4 Flash via **ds4**) are strong at coding but **expensive on context**. Prefill and multi-`read` rounds dominate wall time.
+Local models (especially DeepSeek V4 Flash via **ds4**) are strong at coding but **expensive on context**.
+
+For ds4, always start the stack with `./2_start_ds4.sh` so **`ds4_kilo_proxy`** is on `:8083` (thinking **OFF** by default). Raw ds4 thinking mode truncates tool JSON and aborts mid-fix. Prefill and multi-`read` rounds dominate wall time.
 
 ## Tool use
 

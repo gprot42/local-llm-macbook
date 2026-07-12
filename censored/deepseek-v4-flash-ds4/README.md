@@ -4,6 +4,8 @@
 
 Tuned for **M5 Max with 128 GB** unified memory (this machine). Status: 🟢 working.
 
+**Harness (required for Kilo agents):** `./2_start_ds4.sh` starts **ds4-server on `:18083`** plus **`ds4_kilo_proxy` on `:8083`**. The proxy defaults **thinking OFF**, floors `max_tokens`, and soft-repairs truncated tool JSON — without it, Kilo often hits broken tool args and mid-fix aborts.
+
 ### When to use this model
 
 **DeepSeek V4 Flash via ds4** (native GGUF, ~81 GB q2-imatrix) — **great for coding agents**
@@ -122,25 +124,35 @@ cp kilo.json ~/.config/kilo/kilo.jsonc
 
 DeepSeek V4 sampling defaults: `temperature=1.0`, `top_p=1.0` (set in this stack’s `kilo.json`). In thinking mode the server may ignore client sampling knobs (matches DeepSeek fixed-thinking behavior).
 
-### Agent context discipline (important)
+### Harness reliability (important)
 
-Unconstrained agents tend to fire **many parallel `read`s**, which:
+Two failure modes showed up in real Kilo sessions:
 
-- grows context from ~10k → 70k+ in a few turns
-- makes prefill dominate wall time (30–60 s+)
-- drops decode from ~28 t/s toward ~16 t/s near 50k tokens
-
-This stack’s `kilo.json` counters that:
+| Symptom | Cause | Mitigation in this stack |
+|---------|--------|---------------------------|
+| `JSON Parse error: Expected '}'` on tool args | Thinking + short budget truncates DSML/tool JSON | **`ds4_kilo_proxy`**: thinking OFF, `max_tokens` floor, JSON close repair |
+| “Response ended without a finish reason” / plan-only, no edit | CoT burns tokens; agent never applies the fix | Proxy + agent prompts: **finish the job**, prefer `bash`, no invented tools |
+| Context 10k → 70k in a few turns | Parallel `read` storms | Prompts + `tool_output` caps + `compaction.prune` |
 
 | Knob | Setting | Why |
 |------|---------|-----|
-| `agent.build` / `plan` / `explore` / `debug` **prompts** | Cap ≤3–4 file reads/turn; prefer glob/grep; act early | Stops explore storms |
-| `agent.*.steps` | 12–40 depending on mode | Bounds runaway tool loops |
-| `instructions` | `AGENTS.md` | Same rules as durable project context |
-| `compaction.prune` | `true` | Drops old tool outputs from context |
+| **Public API** | `:8083` → `ds4_kilo_proxy` → `:18083` ds4-server | Agent-safe defaults without changing Kilo baseURL |
+| Thinking | default **disabled** | Tool calls land in content, not truncated CoT |
+| `max_tokens` floor | 8192 (proxy + server `-n`) | Enough room for complete tool argument JSON |
+| `agent.*` prompts | Finish job; ≤3–4 reads; only schema tools | Stops diagnose-and-bail + explore storms |
+| `agent.*.steps` | 12–40 | Bounds runaway loops |
+| `instructions` | `AGENTS.md` | Durable project rules |
+| `compaction.prune` | `true` | Drops old tool outputs |
 | `tool_output` | 400 lines / 32 KiB | Truncates huge file dumps |
 
-Reload Kilo / VS Code after changing `kilo.json`. Still start a **new chat** after a large review (~50–60% of the context bar).
+```bash
+./2_start_ds4.sh status          # public :8083 + upstream :18083
+./2_start_ds4.sh restart         # reload engine + proxy
+./2_start_ds4.sh --no-proxy      # raw ds4 on :8083 (not agent-safe)
+curl -s http://127.0.0.1:8083/healthz
+```
+
+Reload Kilo / VS Code after changing `kilo.json`. Start a **new chat** after a large review (~50–60% of the context bar).
 
 ---
 
@@ -228,8 +240,9 @@ deepseek-v4-flash-ds4/
   2_start_ds4.sh        # ds4-server wrapper (validates weights, status/stop/restart)
   download_gguf.py      # Range-resume HF downloader (survives connection resets)
   validate_model.py     # exact size + GGUF magic checks
-  kilo.json             # Kilo provider ds4 + agent context discipline
-  AGENTS.md             # durable agent rules (cap parallel reads, verify early)
+  kilo.json             # Kilo provider ds4 + agent harness prompts
+  AGENTS.md             # durable agent rules (tools, finish job, context)
+  ds4_kilo_proxy.py     # thinking-off + tool JSON soft-repair proxy
   README.md
   bin/curl-resilient    # curl retry shim (PRO path / upstream download_model.sh)
   ds4/                  # git clone of antirez/ds4 (not committed)

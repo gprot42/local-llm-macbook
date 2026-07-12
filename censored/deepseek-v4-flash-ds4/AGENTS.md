@@ -1,25 +1,33 @@
-# Agent rules — DeepSeek V4 Flash (ds4 / native Metal)
+# Agent rules — DeepSeek V4 Flash (ds4 harness)
 
-Local Flash is **great for coding** but **expensive on context**. Prefill and multi-`read` rounds dominate wall time. Follow this so agent sessions stay fast and under the context limit.
+Local Flash is **great for coding** when the **harness** is correct. Raw ds4 defaults to **high-effort thinking**, which often:
 
-## Tool use
+- truncates tool-call JSON (`JSON Parse error: Expected '}'`)
+- ends streams without a clean finish (`Response ended without a finish reason`)
+- burns tokens on diagnosis and **never applies the fix**
 
-1. **Cap parallel reads** — at most **3–4** file opens per turn (never 8–10).
-2. **Discover with glob/grep first** — then open only files needed for the next edit or answer.
-3. **Do not re-read** files already in the conversation.
-4. **Ignore noise** — `node_modules/`, `dist/`, `build/`, lockfiles, minified bundles, large generated assets.
-5. **Act early** — once you can edit or answer, stop exploring.
+`./2_start_ds4.sh` runs **`ds4_kilo_proxy`** on `:8083` (thinking **OFF** by default) in front of ds4-server on `:18083`.
 
-## Verify instead of re-exploring
+## Finish the job
 
-- Prefer the project’s typecheck/build/tests (`tsc`, `npm test`, `npm run build`) over another wave of blind reads.
-- Fix from compiler/test output; only open files named by the failure.
+1. Diagnose **and implement**. Do not stop after explaining the bug.
+2. Verify with the project’s typecheck/build/tests.
+3. If a tool fails, retry with a simpler allowed tool — usually **`bash`**.
+
+## Tool reliability
+
+1. **Only** call tools present in the request schema. Never invent `background_process` or similar.
+2. Prefer **`bash`** for shell: `cd /full/path && npm run dev -- --host 127.0.0.1 --port 5173`.
+3. Keep arguments short. **Finish every JSON brace/quote** before ending the tool call.
+4. Cap parallel file reads at **3–4** per turn; discover with glob/grep first.
+5. Do not re-read files already in the conversation. Skip `node_modules/`, `dist/`, lockfiles.
 
 ## Session hygiene
 
-- A deep review that hits **~50–60%** of the context window is done — summarize and **start a new chat** for the next feature.
-- Do not paste huge file bodies into chat replies; short summaries and targeted diffs only.
+- After a deep review (~50–60% of the context bar), summarize and **start a new chat**.
+- Prefer short summaries over dumping large files into the reply.
 
-## Sampling
+## Sampling / thinking
 
-Use DeepSeek defaults from `kilo.json`: `temperature=1.0`, `top_p=1.0`. Do not “optimize” sampling for coding quality.
+- Defaults: `temperature=1.0`, `top_p=1.0`.
+- Thinking is **disabled by the proxy** for agent reliability. To force thinking on a raw curl: `"think": true` or `"reasoning_effort": "high"`.
