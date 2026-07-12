@@ -20,7 +20,7 @@ From a live Kilo agent session (explore + many parallel `read` tools):
 |--------|---------|--------|
 | Prefill | ~200–415 t/s | Slows as prompt grows |
 | Decode | ~25–30 t/s early; ~16 t/s near ~50k ctx | Expected long-context drop |
-| Tools | Parallel multi-`read` rounds work | Context balloons fast — compact or new chat before 100k |
+| Tools | Tool calling works | Uncapped parallel `read` storms balloon context — **mitigated in `kilo.json`** |
 | Load | ~12 s Metal residency for ~83 GiB mapped | One-time per process start |
 
 ### ds4 vs MLX DeepSeek in this repo
@@ -102,8 +102,12 @@ server is already healthy, and waits longer for graceful stop on large loads.
 ## Kilo Code
 
 ```bash
-# This stack only
+# This stack only (includes agent context discipline)
 cp kilo.json /path/to/your/project/kilo.json
+cp AGENTS.md /path/to/your/project/AGENTS.md   # optional but recommended
+
+# Global install for this machine:
+cp kilo.json ~/.config/kilo/kilo.jsonc
 
 # Or use the monorepo root (all providers, including ds4):
 #   cp ../../kilo.json ~/.config/kilo/kilo.jsonc
@@ -117,6 +121,26 @@ cp kilo.json /path/to/your/project/kilo.json
 | Timeouts | 900s / header 180s / chunk 300s (large prefill) |
 
 DeepSeek V4 sampling defaults: `temperature=1.0`, `top_p=1.0` (set in this stack’s `kilo.json`). In thinking mode the server may ignore client sampling knobs (matches DeepSeek fixed-thinking behavior).
+
+### Agent context discipline (important)
+
+Unconstrained agents tend to fire **many parallel `read`s**, which:
+
+- grows context from ~10k → 70k+ in a few turns
+- makes prefill dominate wall time (30–60 s+)
+- drops decode from ~28 t/s toward ~16 t/s near 50k tokens
+
+This stack’s `kilo.json` counters that:
+
+| Knob | Setting | Why |
+|------|---------|-----|
+| `agent.build` / `plan` / `explore` / `debug` **prompts** | Cap ≤3–4 file reads/turn; prefer glob/grep; act early | Stops explore storms |
+| `agent.*.steps` | 12–40 depending on mode | Bounds runaway tool loops |
+| `instructions` | `AGENTS.md` | Same rules as durable project context |
+| `compaction.prune` | `true` | Drops old tool outputs from context |
+| `tool_output` | 400 lines / 32 KiB | Truncates huge file dumps |
+
+Reload Kilo / VS Code after changing `kilo.json`. Still start a **new chat** after a large review (~50–60% of the context bar).
 
 ---
 
@@ -204,7 +228,8 @@ deepseek-v4-flash-ds4/
   2_start_ds4.sh        # ds4-server wrapper (validates weights, status/stop/restart)
   download_gguf.py      # Range-resume HF downloader (survives connection resets)
   validate_model.py     # exact size + GGUF magic checks
-  kilo.json             # Kilo provider ds4 / model ds4/deepseek-v4-flash
+  kilo.json             # Kilo provider ds4 + agent context discipline
+  AGENTS.md             # durable agent rules (cap parallel reads, verify early)
   README.md
   bin/curl-resilient    # curl retry shim (PRO path / upstream download_model.sh)
   ds4/                  # git clone of antirez/ds4 (not committed)

@@ -1,15 +1,42 @@
 {
   "$schema": "https://app.kilo.ai/config.json",
   "model": "ds4/deepseek-v4-flash",
+  "default_agent": "build",
+  "instructions": ["AGENTS.md"],
   "agent": {
     "build": {
       "temperature": 1.0,
-      "top_p": 1.0
+      "top_p": 1.0,
+      "steps": 40,
+      "prompt": "You are coding on a local DeepSeek V4 Flash (native Metal) model. Context and prefill are expensive.\n\nContext discipline:\n- Prefer glob/grep over bulk file reads. At most 3–4 file reads per turn (never 8–10).\n- Do not re-read files already in the conversation. Skip node_modules, dist, build outputs, lockfiles, and minified assets.\n- Map the tree lightly first (list/glob), then open only files needed for the next edit or answer.\n- As soon as you have enough signal, stop exploring and act (edit + verify).\n- Verify early with the project typecheck/build (e.g. tsc, npm test, npm run build). Fix from compiler errors instead of more blind reads.\n- Prefer short summaries over pasting large file bodies into the reply.\n- If context is getting large, finish the current task and stop; suggest a new chat for the next feature."
     },
     "plan": {
       "temperature": 1.0,
-      "top_p": 1.0
+      "top_p": 1.0,
+      "steps": 20,
+      "prompt": "You are planning on a local DeepSeek V4 Flash model. Keep plans tight.\n\n- Prefer glob/grep over bulk reads; at most 3–4 file reads per turn.\n- Do not re-read files already in context. Skip node_modules, dist, lockfiles.\n- Sample only the files needed to produce a concrete plan; do not mirror the whole tree.\n- Output a short ordered plan with risks and verification commands — not a file dump."
+    },
+    "explore": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "steps": 12,
+      "prompt": "You are exploring a codebase on a local model with costly long context.\n\n- Use glob/grep first. At most 3 file reads per turn.\n- Never open entire directories of source at once. Prefer symbols, errors, and entrypoints.\n- Do not re-read files already returned. Stop when you can answer or hand off with a short map of relevant paths."
+    },
+    "debug": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "steps": 30,
+      "prompt": "You are debugging on a local DeepSeek V4 Flash model.\n\n- Start from the error/log/stack, not a full-repo survey.\n- At most 3–4 file reads per turn; prefer grep for symbols in the stack.\n- Reproduce with a minimal command (tsc, test, build) early. Fix the smallest root cause; avoid exploratory read storms."
     }
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "tail_turns": 2
+  },
+  "tool_output": {
+    "max_lines": 400,
+    "max_bytes": 32768
   },
   "permission": {
     "read": "allow",
