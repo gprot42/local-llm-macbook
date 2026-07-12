@@ -48,6 +48,9 @@ weights/
 **/gemma-[0-9]-*/
 **/diffusiongemma-*/
 **/deepseek-v4-flash-2bit-dq/
+# DwarfStar (antirez/ds4) clone + local config (weights are *.gguf already)
+**/deepseek-v4-flash-ds4/ds4/
+**/deepseek-v4-flash-ds4/.ds4_config
 # Do not use **/Qwen* or **/qwen3* — macOS case-folding matches project dirs
 # like qwen3-6-27b-coder-mtplx. Weight files are covered by *.safetensors etc.
 

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Thin curl wrapper used by 1_setup_download.sh during GGUF downloads.
+# Adds retries / timeouts without patching upstream ds4/download_model.sh.
+set -euo pipefail
+
+REAL_CURL="${DS4_REAL_CURL:-}"
+if [[ -z "$REAL_CURL" ]]; then
+    # Prefer non-wrapper curl on PATH (skip this script's directory).
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    REAL_CURL="$(PATH="$(echo "$PATH" | tr ':' '\n' | grep -v "^${SCRIPT_DIR}$" | paste -sd: -)" command -v curl)"
+fi
+if [[ -z "${REAL_CURL}" || ! -x "${REAL_CURL}" ]]; then
+    echo "curl-resilient: could not find real curl" >&2
+    exit 127
+fi
+
+# Only inject resilience flags when the caller did not already set them.
+# Keep resume (-C) and auth headers intact from download_model.sh.
+exec "$REAL_CURL" \
+    --retry "${CURL_RETRY:-20}" \
+    --retry-delay "${CURL_RETRY_DELAY:-5}" \
+    --retry-all-errors \
+    --connect-timeout "${CURL_CONNECT_TIMEOUT:-30}" \
+    --speed-time "${CURL_SPEED_TIME:-120}" \
+    --speed-limit "${CURL_SPEED_LIMIT:-1000}" \
+    "$@"
