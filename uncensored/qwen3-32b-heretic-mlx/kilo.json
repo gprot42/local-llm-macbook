@@ -1,0 +1,44 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "qwen3-heretic/qwen3-32b-heretic-mlx-5bit",
+  "agent": {
+    "build": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "plan": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "bash": "allow"
+  },
+  "provider": {
+    "qwen3-heretic": {
+      "name": "Qwen3-32B Heretic (MLX 5-bit, uncensored) — not Qwen3.6/3.7",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://127.0.0.1:8084/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "qwen3-32b-heretic-mlx-5bit": {
+          "name": "Qwen3-32B Heretic MLX 5-bit (~22.5 GB) — original Qwen3 dense, uncensored (not 3.6/3.7)",
+          "tool_call": true,
+          "limit": {
+            "context": 32768,
+            "output": 16384
+          }
+        }
+      }
+    }
+  }
+}

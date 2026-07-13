@@ -64,6 +64,10 @@ weights/
 # mtplx / HF downloads for the Qwen coding stack (inside project dir)
 **/qwen3-6-27b-coder-mtplx/**/models/
 **/qwen3-6-27b-coder-mtplx/**/checkpoints/
+# Uncensored Qwen HF checkouts (weights + tokenizer; download via 1_setup_download.sh)
+**/qwen3-32b-heretic-mlx/qwen3-32b-heretic-mlx-5bit/
+**/qwen3-32b-heretic-mlx/.qwen3_heretic_config
+**/qwen3.5-122b-a10b-abliterated-mlx/qwen3.5-122b-a10b-abliterated-mlx-4bit/
 
 # Legacy layout paths (older folder names)
 gemma4-server-heretic-31b-mlx/gemma-*/

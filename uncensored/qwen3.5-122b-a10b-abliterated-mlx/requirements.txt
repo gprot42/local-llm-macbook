@@ -1,0 +1,14 @@
+# Qwen3.5-122B-A10B Abliterated — MLX host stack
+mlx>=0.26
+mlx-lm>=0.28
+huggingface_hub>=0.26
+transformers>=4.51
+jinja2
+numpy
+protobuf
+pyyaml
+sentencepiece
+safetensors
+fastapi
+uvicorn
+httpx
