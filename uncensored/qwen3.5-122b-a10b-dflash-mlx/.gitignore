@@ -1,0 +1,9 @@
+venv/
+.dflash_122b_config
+.dflash_server.log
+.dflash_server.pid
+Qwen3.5-122B-A10B-DFlash/
+dflash-mlx/cache/
+__pycache__/
+*.pyc
+.DS_Store

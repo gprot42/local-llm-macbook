@@ -63,7 +63,8 @@ Do **not** co-load with DeepSeek V4 or another 70+ GB model on 128 GB.
 
 | File | Purpose |
 |------|---------|
-| `1_setup_download.sh` | venv + HF download (+ optional `mlx_lm convert -q` for BF16 overrides) |
+| `1_setup_download.sh` | venv + resumable HF download (+ optional `mlx_lm convert -q` for BF16 overrides) |
+| `download_resumable.py` | HTTP Range resume for partial shards (stock `hf download` restarts them) |
 | `2_start_mlx.sh` | start / stop / status on `:8085` |
 | `3_chat.sh` | terminal chat |
 | `validate_model.py` | refuse start if shards incomplete |
@@ -110,5 +111,6 @@ HF_REPO=huihui-ai/Huihui-Qwen3.5-122B-A10B-abliterated ./1_setup_download.sh
 
 ## Related
 
+- **DFlash (faster decode, same target):** [`../qwen3.5-122b-a10b-dflash-mlx/`](../qwen3.5-122b-a10b-dflash-mlx/) on `:8086`
 - Qwen3-32B Heretic (true Qwen3 dense): [`../qwen3-32b-heretic-mlx/`](../qwen3-32b-heretic-mlx/)
 - Aligned Qwen3.6 27B coding: [`../../censored/qwen3-6-27b-coder-mtplx/`](../../censored/qwen3-6-27b-coder-mtplx/)

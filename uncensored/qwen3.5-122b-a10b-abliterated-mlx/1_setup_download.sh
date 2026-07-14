@@ -153,6 +153,7 @@ PY
 echo ""
 
 VALIDATE_MODEL="$SCRIPT_DIR/validate_model.py"
+DOWNLOAD_RESUMABLE="$SCRIPT_DIR/download_resumable.py"
 
 model_is_complete() {
     local dir="$1"
@@ -201,6 +202,8 @@ else
     else
         echo "→ Fetching $HF_REPO ..."
         echo "   If you get 401/403:  hf auth login"
+        echo "   Resume: completed shards skip; partial shards continue via HTTP Range"
+        echo "   (stock hf download does NOT resume multi-GB partials — we use download_resumable.py)"
         echo ""
         FORCE_FLAG=()
         [[ "$FORCE_DOWNLOAD" == true ]] && FORCE_FLAG=(--force-download)
@@ -208,14 +211,65 @@ else
         # Prefer download straight into MODEL_DIR when the hub pack is already MLX-quantized.
         # Fall back to SRC_DIR + convert for raw BF16 overrides (needs huge RAM/disk).
         mkdir -p "$MODEL_DIR"
-        if ! hf download "$HF_REPO" --local-dir "$MODEL_DIR" "${FORCE_FLAG[@]}"; then
+
+        # download_resumable.py wraps snapshot_download with stable .incomplete files +
+        # HTTP Range resume. Own the PID so Ctrl+C can TERM cleanly (flush partials)
+        # before escalating to KILL (which would strand buffers).
+        DOWNLOAD_PID=""
+        stop_download() {
             echo ""
-            echo "ERROR: Failed to download $HF_REPO"
+            echo "→ Download interrupted (Ctrl+C)."
+            if [[ -n "${DOWNLOAD_PID:-}" ]] && kill -0 "$DOWNLOAD_PID" 2>/dev/null; then
+                # TERM first so open files flush and stable .incomplete is kept.
+                kill -TERM "$DOWNLOAD_PID" 2>/dev/null || true
+                local _i
+                for _i in $(seq 1 50); do
+                    kill -0 "$DOWNLOAD_PID" 2>/dev/null || break
+                    sleep 0.1
+                done
+                if kill -0 "$DOWNLOAD_PID" 2>/dev/null; then
+                    # Hard-kill avoids Python threading._shutdown KeyboardInterrupt spam.
+                    kill -KILL "$DOWNLOAD_PID" 2>/dev/null || true
+                fi
+                # Reap without re-raising set -e on non-zero wait status.
+                wait "$DOWNLOAD_PID" 2>/dev/null || true
+            fi
+            # Promote any UUID orphans left by a hard-kill into stable resume paths.
+            "$VENV_PY" "$DOWNLOAD_RESUMABLE" "$HF_REPO" --local-dir "$MODEL_DIR" --cleanup-only 2>/dev/null || true
+            echo "  Partial files kept under: $MODEL_DIR"
+            echo "  Re-run ./1_setup_download.sh — completed shards skip, partials Range-resume."
+            exit 130
+        }
+        trap stop_download INT TERM
+
+        set +e
+        # Unbuffered so "resuming …" lines show up during long transfers.
+        PYTHONUNBUFFERED=1 "$VENV_PY" "$DOWNLOAD_RESUMABLE" "$HF_REPO" \
+            --local-dir "$MODEL_DIR" "${FORCE_FLAG[@]}" &
+        DOWNLOAD_PID=$!
+        wait "$DOWNLOAD_PID"
+        download_rc=$?
+        set -e
+        DOWNLOAD_PID=""
+        trap - INT TERM
+
+        # 130=SIGINT, 143=SIGTERM, 137=SIGKILL — user/system abort, not a repo error.
+        if [[ "$download_rc" -eq 130 || "$download_rc" -eq 143 || "$download_rc" -eq 137 ]]; then
+            echo ""
+            echo "→ Download interrupted."
+            "$VENV_PY" "$DOWNLOAD_RESUMABLE" "$HF_REPO" --local-dir "$MODEL_DIR" --cleanup-only 2>/dev/null || true
+            echo "  Partial files kept under: $MODEL_DIR"
+            echo "  Re-run ./1_setup_download.sh — completed shards skip, partials Range-resume."
+            exit 130
+        elif [[ "$download_rc" -ne 0 ]]; then
+            echo ""
+            echo "ERROR: Failed to download $HF_REPO (exit $download_rc)"
             echo "  • 401/403 → hf auth login  (accept license on the model page if gated)"
             echo "  • 404     → confirm the repo id / visibility"
             echo "  • Default: vanch007/Qwen3.5-122B-A10B-abliterated-4bit-vlm-mlx-cs2764-final"
             echo "  • Override: HF_REPO=org/name ./1_setup_download.sh"
             echo "  • BF16 abliterated (huge): HF_REPO=huihui-ai/Huihui-Qwen3.5-122B-A10B-abliterated"
+            echo "  • Ctrl+C is safe — re-run continues partial shards (HTTP Range resume)"
             exit 1
         fi
 
@@ -266,6 +320,7 @@ MODEL_ID="${MODEL_ID}"
 EOF
 
 chmod +x "$SCRIPT_DIR/validate_model.py" \
+    "$SCRIPT_DIR/download_resumable.py" \
     "$SCRIPT_DIR/2_start_mlx.sh" \
     "$SCRIPT_DIR/3_chat.sh" 2>/dev/null || true
 

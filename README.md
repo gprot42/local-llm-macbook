@@ -27,9 +27,10 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`uncensored/gemma4-server-heretic-31b-mlx/`](uncensored/gemma4-server-heretic-31b-mlx/) | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` | 🟢 Uncensored chat (Heretic) | `:8080/v1` |
 | [`uncensored/qwen3-32b-heretic-mlx/`](uncensored/qwen3-32b-heretic-mlx/) | `qwen3-heretic/qwen3-32b-heretic-mlx-5bit` | 🟢 Uncensored dense 32B (MLX; not 3.6/3.7) | `:8084/v1` |
 | [`uncensored/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/qwen3.5-122b-a10b-abliterated-mlx/) | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` | 🟢 Uncensored MoE 122B (MLX) | `:8085/v1` |
+| [`uncensored/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/qwen3.5-122b-a10b-dflash-mlx/) | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` | 🟡 Uncensored 122B + **DFlash** (fast decode; Kilo agents flaky) | `:8086/v1` |
 | [`uncensored/glm-4.7-flash-heretic-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-gguf-ollama/) | `glm/glm-4.7-flash-heretic-q8` | 🟢 Uncensored MoE (Ollama) | `:18083/v1` |
 
-**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen 3.6 mtplx (`8765`), Ornith (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB.
+**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Qwen 3.6 mtplx (`8765`), Ornith (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB.
 
 ---
 
@@ -76,6 +77,7 @@ Root [`kilo.json`](kilo.json) currently defaults to **`glm/glm-4.7-flash-heretic
 | Uncensored / low-refusal chat (Gemma) | 🟡 **Gemma JANG_4M CRACK** | **Kilo Code may filter** — some questions still get blocked; not of much use as a Kilo agent |
 | Uncensored / uniform 4-bit Gemma | 🟢 **Gemma Heretic** | Want native multimodal without vision graft |
 | Uncensored dense 32B (MLX, **Qwen3** not 3.6) | 🟢 **Qwen3-32B Heretic** | Need Qwen3.6; prefer snappy `mtplx/qwen3.6-27b-mtplx` for coding |
+| Uncensored 122B with **fast decode** (DFlash) | 🟡 **Qwen3.5-122B DFlash** | Long Kilo agent loops (context/prefill thrash); co-load another 70+ GB model; need vision; prefer Qwen3.6 mtplx for snappy tools |
 | Uncensored MoE coding (Ollama) | 🟢 **GLM-4.7 Flash Heretic** | Need vision; prefer MLX Gemma for chat UI polish |
 
 **RAM:** ~128 GB → all stacks. ~80 GB → skip full DeepSeek 2bit-DQ / prefer ds4 q2. ≤64 GB → Qwen and smaller only. Don’t load two huge models at once.
@@ -109,6 +111,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 | 🟢 | [`uncensored/gemma4-server-heretic-31b-mlx/`](uncensored/gemma4-server-heretic-31b-mlx/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` |
 | 🟢 | [`uncensored/qwen3-32b-heretic-mlx/`](uncensored/qwen3-32b-heretic-mlx/) | `http://127.0.0.1:8084/v1` | `qwen3-heretic/qwen3-32b-heretic-mlx-5bit` |
 | 🟢 | [`uncensored/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/qwen3.5-122b-a10b-abliterated-mlx/) | `http://127.0.0.1:8085/v1` | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` |
+| 🟡 | [`uncensored/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/qwen3.5-122b-a10b-dflash-mlx/) | `http://127.0.0.1:8086/v1` | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` |
 | 🟢 | [`uncensored/glm-4.7-flash-heretic-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-gguf-ollama/) | `http://127.0.0.1:18083/v1` | `glm/glm-4.7-flash-heretic-q8` |
 
 Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks — macOS may resolve `localhost` to `::1`.
@@ -118,6 +121,8 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 ---
 
 ## More docs
+
+- **[README-models.md](README-models.md)** — good / not-good use cases for every stack, plus DFlash compatibility notes
 
 **Censored (aligned)**
 
@@ -134,6 +139,7 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 - [gemma4-server-heretic-31b-mlx/README.md](uncensored/gemma4-server-heretic-31b-mlx/README.md) — Heretic + proxy · [Continue.dev](uncensored/gemma4-server-heretic-31b-mlx/README.md#continuedev)  
 - [qwen3-32b-heretic-mlx/README.md](uncensored/qwen3-32b-heretic-mlx/README.md) — Qwen3-32B Heretic (original Qwen3 dense, not 3.6/3.7)  
 - [qwen3.5-122b-a10b-abliterated-mlx/README.md](uncensored/qwen3.5-122b-a10b-abliterated-mlx/README.md) — Qwen3.5-122B-A10B Abliterated MLX 4-bit (~70 GB; 128 GB recommended)  
+- [qwen3.5-122b-a10b-dflash-mlx/README.md](uncensored/qwen3.5-122b-a10b-dflash-mlx/README.md) — same target + z-lab DFlash draft (fast decode; exactness verified)  
 - [GLM Heretic README](uncensored/glm-4.7-flash-heretic-gguf-ollama/README.md)
 
 ---

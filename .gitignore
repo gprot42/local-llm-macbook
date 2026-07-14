@@ -68,6 +68,7 @@ weights/
 **/qwen3-32b-heretic-mlx/qwen3-32b-heretic-mlx-5bit/
 **/qwen3-32b-heretic-mlx/.qwen3_heretic_config
 **/qwen3.5-122b-a10b-abliterated-mlx/qwen3.5-122b-a10b-abliterated-mlx-4bit/
+**/qwen3.5-122b-a10b-abliterated-mlx/.qwen35_122b_config
 
 # Legacy layout paths (older folder names)
 gemma4-server-heretic-31b-mlx/gemma-*/

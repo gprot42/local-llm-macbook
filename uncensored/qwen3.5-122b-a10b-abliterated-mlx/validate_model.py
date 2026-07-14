@@ -74,14 +74,6 @@ def validate(model_dir: Path) -> tuple[list[str], list[str], int]:
         elif path.stat().st_size == 0:
             errors.append(f"empty weight shard: {shard}")
 
-    cache_dir = model_dir / ".cache" / "huggingface" / "download"
-    if cache_dir.is_dir():
-        incomplete = sorted(cache_dir.glob("*.incomplete"))
-        if incomplete:
-            errors.append(
-                f"incomplete download(s) in cache ({len(incomplete)} file(s))"
-            )
-
     if shards and not errors:
         actual_bytes = sum((model_dir / s).stat().st_size for s in shards)
         if expected_bytes and actual_bytes < expected_bytes * 0.99:
@@ -94,6 +86,18 @@ def validate(model_dir: Path) -> tuple[list[str], list[str], int]:
             errors.append(
                 f"weight shards suspiciously small for 122B-A10B 4-bit "
                 f"({actual_bytes / 1e9:.2f} GB); re-run download"
+            )
+
+    # Orphan .incomplete temps only matter when weights are still incomplete.
+    # After a successful download they may linger until cleanup; if shards look
+    # complete, treat them as noise rather than failing validation.
+    cache_dir = model_dir / ".cache" / "huggingface" / "download"
+    if cache_dir.is_dir():
+        incomplete = sorted(cache_dir.glob("*.incomplete"))
+        if incomplete and errors:
+            errors.append(
+                f"incomplete download(s) in cache ({len(incomplete)} file(s)); "
+                f"re-run ./1_setup_download.sh to Range-resume"
             )
 
     return (errors, shards, expected_bytes)
