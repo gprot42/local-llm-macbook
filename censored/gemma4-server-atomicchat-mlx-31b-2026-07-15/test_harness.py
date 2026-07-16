@@ -10,6 +10,7 @@ Usage:
   python3 test_harness.py --unit-only   # pure proxy helpers, no network
   python3 test_harness.py --live-only
   python3 test_harness.py --quick       # skip slower multi-turn live tests
+  python3 test_harness.py --fringe-only # fringe edge cases only
 
 Exit codes:
   0  all required checks passed
@@ -603,9 +604,521 @@ def run_unit_tests(report: Report) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Live tests
-# ---------------------------------------------------------------------------
+def run_fringe_unit_tests(report: Report) -> None:
+    """Edge cases that previously bit this stack or are easy regressions."""
+    print("\n== Fringe unit: thinking force-off ==")
+
+    body = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": list(TOOLS),
+        "tool_choice": "auto",
+        "enable_thinking": True,
+        "thinking": {"type": "enabled"},
+        "chat_template_kwargs": {"enable_thinking": True, "foo": "bar"},
+    }
+    proxy._prepare_body(body)
+    report.check(
+        "fringe: client enable_thinking=true forced false",
+        body.get("enable_thinking") is False
+        and body.get("chat_template_kwargs", {}).get("enable_thinking") is False,
+        f"kwargs={body.get('chat_template_kwargs')}",
+    )
+    report.check(
+        "fringe: preserves other chat_template_kwargs keys",
+        body.get("chat_template_kwargs", {}).get("foo") == "bar",
+    )
+    report.check(
+        "fringe: thinking dict set to disabled",
+        isinstance(body.get("thinking"), dict)
+        and body["thinking"].get("type") == "disabled",
+    )
+
+    print("\n== Fringe unit: tool_choice dict forms ==")
+
+    body_dict_none = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": list(TOOLS),
+        "tool_choice": {"type": "none"},
+    }
+    report.check(
+        "fringe: tool_choice {type:none} IS compaction",
+        proxy._looks_like_compaction(body_dict_none) is True,
+    )
+    tr = proxy._prepare_body(body_dict_none)
+    report.check(
+        "fringe: dict tool_choice none strips tools",
+        tr["compaction"] is True and "tools" not in body_dict_none,
+    )
+
+    body_dict_fn = {
+        "messages": [
+            {"role": "system", "content": SUMMARIZE_BAIT_SYSTEM},
+            {"role": "user", "content": "run bash"},
+        ],
+        "tools": list(TOOLS),
+        "tool_choice": {"type": "function", "function": {"name": "bash"}},
+    }
+    report.check(
+        "fringe: tool_choice function dict is NOT compaction",
+        proxy._looks_like_compaction(body_dict_fn) is False,
+    )
+    tr_fn = proxy._prepare_body(body_dict_fn)
+    report.check(
+        "fringe: tool_choice function dict keeps tools",
+        tr_fn["compaction"] is False and "tools" in body_dict_fn,
+    )
+
+    print("\n== Fringe unit: content vs reasoning remap ==")
+
+    data_both = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "KEEP_ME",
+                    "reasoning": "should_not_overwrite",
+                }
+            }
+        ]
+    }
+    changed = proxy._remap_reasoning_in_completion_payload(data_both)
+    report.check(
+        "fringe: remap does not overwrite existing content",
+        changed is False
+        and data_both["choices"][0]["message"]["content"] == "KEEP_ME"
+        and data_both["choices"][0]["message"].get("reasoning")
+        == "should_not_overwrite",
+    )
+
+    data_empty_str = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "   ",
+                    "reasoning": "REAL",
+                }
+            }
+        ]
+    }
+    report.check(
+        "fringe: whitespace content treated empty → remap reasoning",
+        proxy._remap_reasoning_in_completion_payload(data_empty_str)
+        and data_empty_str["choices"][0]["message"]["content"] == "REAL",
+    )
+
+    print("\n== Fringe unit: nudge idempotency ==")
+
+    body_id = {
+        "messages": [
+            {"role": "system", "content": "base system"},
+            {"role": "user", "content": "go"},
+        ],
+        "tools": list(TOOLS),
+        "tool_choice": "auto",
+    }
+    proxy._prepare_body(body_id)
+    c1 = body_id["messages"][0]["content"].count("[Harness] Multi-step tasks:")
+    proxy._prepare_body(body_id)
+    c2 = body_id["messages"][0]["content"].count("[Harness] Multi-step tasks:")
+    report.check(
+        "fringe: multi-step nudge not duplicated on re-prepare",
+        c1 == 1 and c2 == 1,
+        f"counts={c1},{c2}",
+    )
+
+    body_er = {
+        "messages": [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "x"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "1", "type": "function", "function": {"name": "bash"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "1", "content": "(no output)"},
+        ],
+        "tools": list(TOOLS),
+        "tool_choice": "auto",
+    }
+    proxy._prepare_body(body_er)
+    e1 = body_er["messages"][0]["content"].count("[Harness] EMPTY TOOL RESULT:")
+    proxy._prepare_body(body_er)
+    e2 = body_er["messages"][0]["content"].count("[Harness] EMPTY TOOL RESULT:")
+    report.check(
+        "fringe: empty-tool nudge not duplicated on re-prepare",
+        e1 == 1 and e2 == 1,
+        f"counts={e1},{e2}",
+    )
+
+    print("\n== Fringe unit: role=function + malformed edges ==")
+
+    msgs_fn = [
+        {"role": "user", "content": "x"},
+        {"role": "function", "content": ""},
+    ]
+    report.check(
+        "fringe: role=function empty counts in streak",
+        proxy._recent_empty_tool_streak(msgs_fn) == 1,
+    )
+
+    msgs_mix = [
+        {"role": "user", "content": "x"},
+        {"role": "tool", "content": "(no output)"},
+        {"role": "function", "content": "no matches found"},
+    ]
+    report.check(
+        "fringe: mixed tool/function empty streak == 2",
+        proxy._recent_empty_tool_streak(msgs_mix) == 2,
+    )
+
+    # Missing / empty messages should not crash prepare
+    try:
+        b_missing = {"tools": list(TOOLS), "tool_choice": "auto"}
+        tr_m = proxy._prepare_body(b_missing)
+        report.check(
+            "fringe: prepare_body with no messages does not crash",
+            True,
+            f"compaction={tr_m.get('compaction')}",
+        )
+    except Exception as e:
+        report.check(
+            "fringe: prepare_body with no messages does not crash",
+            False,
+            str(e),
+        )
+
+    try:
+        b_empty = {
+            "messages": [],
+            "tools": list(TOOLS),
+            "tool_choice": "auto",
+        }
+        proxy._prepare_body(b_empty)
+        report.check("fringe: prepare_body with empty messages list", True)
+    except Exception as e:
+        report.check("fringe: prepare_body with empty messages list", False, str(e))
+
+    print("\n== Fringe unit: unicode / huge system / parallel tools ==")
+
+    uni = "路径测试 🚀 café " + "漢" * 100
+    msgs_u = [{"role": "user", "content": "x"}, {"role": "tool", "content": uni * 200}]
+    n = proxy._truncate_tool_messages(msgs_u)
+    report.check(
+        "fringe: truncates unicode tool results without crash",
+        n == 1 and "truncated" in msgs_u[1]["content"].lower(),
+        f"len={len(msgs_u[1]['content'])}",
+    )
+
+    huge_sys = ("Do not re-summarize the conversation history. " * 2000) + (
+        "Kilo system prompt bait " * 500
+    )
+    body_huge = {
+        "messages": [
+            {"role": "system", "content": huge_sys},
+            {"role": "user", "content": "use tools please"},
+        ],
+        "tools": list(TOOLS),
+        "tool_choice": "auto",
+    }
+    report.check(
+        "fringe: huge summarize-bait system is NOT compaction",
+        proxy._looks_like_compaction(body_huge) is False,
+        f"sys_len={len(huge_sys)}",
+    )
+    tr_h = proxy._prepare_body(body_huge)
+    report.check(
+        "fringe: huge system still keeps tools",
+        tr_h["tools_out"] == len(TOOLS) and "tools" in body_huge,
+    )
+
+    multi_summary = proxy._summarize_completion_json(
+        {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": "note",
+                        "tool_calls": [
+                            {"function": {"name": "bash", "arguments": "{}"}},
+                            {"function": {"name": "read", "arguments": "{}"}},
+                        ],
+                    },
+                }
+            ]
+        }
+    )
+    report.check(
+        "fringe: summary lists parallel tool_calls",
+        "bash" in multi_summary and "read" in multi_summary,
+        multi_summary,
+    )
+
+    # Chunked stream tool name assembly
+    stats = proxy.StreamHarnessStats()
+    stats.observe_line(
+        b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"ba"}}]}}]}\n'
+    )
+    stats.observe_line(
+        b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"sh"}}]}}]}\n'
+    )
+    # Our stats collect each name fragment as separate names — acceptable;
+    # also accept full name in one chunk:
+    stats2 = proxy.StreamHarnessStats()
+    stats2.observe_line(
+        b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"1","function":{"name":"bash","arguments":""}}]}}]}\n'
+    )
+    stats2.observe_line(
+        b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"c\\":1}"}}]},"finish_reason":"tool_calls"}]}\n'
+    )
+    report.check(
+        "fringe: stream stats catch tool name on first chunk",
+        "bash" in stats2.tool_names and stats2.finish == "tool_calls",
+        stats2.summary(),
+    )
+
+    # SSE with content already set should not wipe
+    line = (
+        b'data: {"choices":[{"delta":{"content":"X","reasoning":"Y"}}]}\n'
+    )
+    # remap only if content empty — content X present so reasoning stays or content kept
+    out = proxy._rewrite_sse_chunk(line)
+    report.check(
+        "fringe: SSE with content+reasoning keeps content",
+        b'"content": "X"' in out or b'"content":"X"' in out,
+        out[:160].decode("utf-8", errors="replace"),
+    )
+
+
+def run_fringe_live_tests(
+    base: str,
+    report: Report,
+    *,
+    quick: bool,
+) -> None:
+    print(f"\n== Fringe live ({base}) ==")
+
+    # Client tries to enable thinking via API
+    try:
+        code, data, elapsed = _chat(
+            base,
+            [{"role": "user", "content": "Reply with exactly the word ZAP."}],
+            max_tokens=16,
+            tools=None,
+            extra={
+                "enable_thinking": True,
+                "chat_template_kwargs": {"enable_thinking": True},
+            },
+        )
+        msg = _msg(data) if isinstance(data, dict) else {}
+        content = _content(msg).strip()
+        reasoning = msg.get("reasoning") or msg.get("reasoning_content")
+        report.check(
+            "fringe live: enable_thinking true still yields content",
+            code == 200 and bool(content) and not (
+                reasoning and not content
+            ),
+            f"content={content[:40]!r} has_reasoning={bool(reasoning)} {elapsed:.2f}s",
+        )
+    except Exception as e:
+        report.check(
+            "fringe live: enable_thinking true still yields content",
+            False,
+            str(e),
+        )
+
+    # Invalid JSON body
+    try:
+        u = urlparse(base)
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=10)
+        t0 = time.time()
+        conn.request(
+            "POST",
+            "/v1/chat/completions",
+            body=b"{not-json",
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        _ = resp.read()
+        elapsed = time.time() - t0
+        status = resp.status
+        conn.close()
+        # 4xx/5xx or 200 with error — must not hang; 400-ish preferred
+        report.check(
+            "fringe live: invalid JSON body does not hang",
+            status != 0 and elapsed < 30,
+            f"status={status} {elapsed:.2f}s",
+        )
+    except Exception as e:
+        # Connection error is still a failure of the check
+        report.check(
+            "fringe live: invalid JSON body does not hang",
+            False,
+            str(e),
+        )
+
+    # Empty messages
+    try:
+        code, data, elapsed = _http_json(
+            base,
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": MODEL,
+                "messages": [],
+                "max_tokens": 8,
+            },
+            timeout=30,
+        )
+        # Accept error response or 200 — just not hang/crash proxy
+        report.check(
+            "fringe live: empty messages list returns promptly",
+            code in range(200, 600) and elapsed < 30,
+            f"status={code} {elapsed:.2f}s",
+        )
+    except Exception as e:
+        report.check(
+            "fringe live: empty messages list returns promptly",
+            False,
+            str(e),
+        )
+
+    # Tiny max_tokens with tools (soft — may length-stop)
+    try:
+        code, data, elapsed = _chat(
+            base,
+            [
+                {
+                    "role": "user",
+                    "content": "Call bash with command: echo tiny",
+                }
+            ],
+            tools=TOOLS,
+            tool_choice="auto",
+            max_tokens=8,
+        )
+        report.check(
+            "fringe live: max_tokens=8 + tools returns 200",
+            code == 200 and isinstance(data, dict),
+            f"finish={_finish(data)!r} tools={_tool_names(_msg(data) if isinstance(data, dict) else {})} {elapsed:.2f}s",
+            soft=code == 200 and _finish(data) == "length",
+        )
+    except Exception as e:
+        report.check(
+            "fringe live: max_tokens=8 + tools returns 200",
+            False,
+            str(e),
+            soft=True,
+        )
+
+    # OPTIONS preflight
+    try:
+        u = urlparse(base)
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=5)
+        conn.request(
+            "OPTIONS",
+            "/v1/chat/completions",
+            headers={
+                "Origin": "http://localhost",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        resp = conn.getresponse()
+        _ = resp.read()
+        status = resp.status
+        conn.close()
+        report.check(
+            "fringe live: OPTIONS preflight",
+            status in (200, 204),
+            f"status={status}",
+            soft=status not in (200, 204),
+        )
+    except Exception as e:
+        report.check("fringe live: OPTIONS preflight", False, str(e), soft=True)
+
+    # Unicode user content
+    try:
+        code, data, elapsed = _chat(
+            base,
+            [{"role": "user", "content": "用一个词回复：好 🚀"}],
+            max_tokens=16,
+            tools=None,
+        )
+        msg = _msg(data) if isinstance(data, dict) else {}
+        report.check(
+            "fringe live: unicode user message yields content",
+            code == 200 and bool(_content(msg).strip()),
+            f"chars={len(_content(msg))} {elapsed:.2f}s",
+        )
+    except Exception as e:
+        report.check(
+            "fringe live: unicode user message yields content",
+            False,
+            str(e),
+        )
+
+    # tool_choice required (soft if unsupported)
+    try:
+        code, data, elapsed = _chat(
+            base,
+            [{"role": "user", "content": "You must call a tool. Use bash: echo req"}],
+            tools=TOOLS,
+            tool_choice="required",
+            max_tokens=64,
+        )
+        msg = _msg(data) if isinstance(data, dict) else {}
+        names = _tool_names(msg)
+        hard_ok = code == 200
+        soft_ok = hard_ok and (bool(names) or _finish(data) == "tool_calls")
+        report.check(
+            "fringe live: tool_choice=required",
+            soft_ok if hard_ok else False,
+            f"status={code} finish={_finish(data)!r} tools={names} {elapsed:.2f}s",
+            soft=hard_ok and not soft_ok,
+        )
+    except Exception as e:
+        report.check("fringe live: tool_choice=required", False, str(e), soft=True)
+
+    if quick:
+        return
+
+    # Concurrent requests (soft — MLX may serialize)
+    try:
+        import concurrent.futures
+
+        def one(i: int) -> tuple[int, float]:
+            t0 = time.time()
+            code, data, _ = _chat(
+                base,
+                [{"role": "user", "content": f"Say {i}"}],
+                max_tokens=4,
+                tools=None,
+                timeout=120,
+            )
+            return code, time.time() - t0
+
+        t0 = time.time()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+            futs = [ex.submit(one, i) for i in range(3)]
+            results = [f.result() for f in futs]
+        total = time.time() - t0
+        codes = [c for c, _ in results]
+        ok_all = all(c == 200 for c in codes)
+        report.check(
+            "fringe live: 3 concurrent short chats all 200",
+            ok_all,
+            f"codes={codes} wall={total:.2f}s",
+            soft=not ok_all,
+        )
+    except Exception as e:
+        report.check(
+            "fringe live: 3 concurrent short chats all 200",
+            False,
+            str(e),
+            soft=True,
+        )
 
 
 def run_live_tests(
@@ -1083,6 +1596,7 @@ def run_live_tests(
             soft=True,
         )
 
+    run_fringe_live_tests(base, report, quick=quick)
     return connected
 
 
@@ -1097,9 +1611,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--unit-only", action="store_true", help="No network")
     ap.add_argument("--live-only", action="store_true", help="Skip unit tests")
     ap.add_argument(
+        "--fringe-only",
+        action="store_true",
+        help="Only fringe unit + fringe live tests",
+    )
+    ap.add_argument(
         "--quick",
         action="store_true",
-        help="Skip slower multi-turn live tests",
+        help="Skip slower multi-turn / concurrent live tests",
     )
     ap.add_argument(
         "--strict",
@@ -1111,18 +1630,34 @@ def main(argv: list[str] | None = None) -> int:
     print("AtomicChat harness tests")
     print(
         f"  base={args.base}  strict={args.strict}  "
-        f"unit_only={args.unit_only} live_only={args.live_only} quick={args.quick}"
+        f"unit_only={args.unit_only} live_only={args.live_only} "
+        f"fringe_only={args.fringe_only} quick={args.quick}"
     )
 
     report = Report()
-    if not args.live_only:
-        run_unit_tests(report)
-
     connected = True
-    if not args.unit_only:
-        connected = run_live_tests(
-            args.base, report, strict=args.strict, quick=args.quick
-        )
+
+    if args.fringe_only:
+        run_fringe_unit_tests(report)
+        if not args.unit_only:
+            try:
+                code, data, _ = _http_json(args.base, "GET", "/healthz", timeout=5)
+                connected = code == 200
+            except Exception:
+                connected = False
+            if connected:
+                run_fringe_live_tests(args.base, report, quick=args.quick)
+            else:
+                report.check("fringe live: proxy reachable", False, args.base)
+    else:
+        if not args.live_only:
+            run_unit_tests(report)
+            run_fringe_unit_tests(report)
+
+        if not args.unit_only:
+            connected = run_live_tests(
+                args.base, report, strict=args.strict, quick=args.quick
+            )
 
     hard = [r for r in report.results if not r.ok and not r.soft]
     soft = [r for r in report.results if not r.ok and r.soft]

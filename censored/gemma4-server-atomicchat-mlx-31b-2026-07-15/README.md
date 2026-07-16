@@ -155,12 +155,13 @@ Cause: auto-compaction still sent `tools`, so Gemma kept exploring instead of wr
 ./2_start_mlx.sh --debug         # proxy DEBUG + harness traces
 ./2_start_mlx.sh --no-harness-log
 curl -s http://127.0.0.1:8080/healthz
-# Standalone harness tests (outside Kilo — ~48 unit+live checks):
+# Standalone harness tests (outside Kilo — ~77 unit+live+fringe checks):
 python3 test_harness.py
 python3 test_harness.py --strict      # also fail soft model-behavior checks
 python3 test_harness.py --unit-only   # pure proxy helpers, no server
-python3 test_harness.py --quick       # skip multi-turn live tests
+python3 test_harness.py --quick       # skip multi-turn / concurrent live tests
 python3 test_harness.py --live-only
+python3 test_harness.py --fringe-only # edge-case pack only
 # tail harness traces (no message bodies):
 #   [harness] req compaction=False tools_in=12 tool_choice_in=auto ...
 #   [harness] resp stream finish='tool_calls' tool_calls=[bash,read] ...
