@@ -58,7 +58,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 # Defaults
 # ---------------------------------------------------------------------------
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UA = os.environ.get("RESEARCH_UA", "Mozilla/5.0")
 DEFAULT_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "30"))
@@ -2921,6 +2921,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--case-sensitive",
         action="store_true",
         help="disable case-insensitive matching",
+    )
+    # GNU grep -E / -G / -P: we always use Python re (≈ extended). Accept as no-ops
+    # so agents do not crash on unrecognized arguments.
+    sp.add_argument(
+        "-E",
+        "--extended-regexp",
+        action="store_true",
+        help="extended regexp (default; -E accepted as no-op — Python re)",
+    )
+    sp.add_argument(
+        "-G",
+        "--basic-regexp",
+        action="store_true",
+        help="basic regexp (accepted; treated like -E / Python re)",
+    )
+    sp.add_argument(
+        "-P",
+        "--perl-regexp",
+        action="store_true",
+        help="perl regexp (accepted; Python re subset only)",
     )
     sp.add_argument("-C", "--context", type=int, default=1)
     sp.add_argument("--max-matches", type=int, default=DEFAULT_GREP_MATCHES)
