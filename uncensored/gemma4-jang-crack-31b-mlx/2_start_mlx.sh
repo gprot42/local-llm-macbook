@@ -44,7 +44,7 @@ for arg in "$@"; do
         echo ""
         echo "Related:"
         echo "  ../gemma4-server-heretic-31b-mlx/  — Heretic 4-bit sibling"
-        echo "  ../gemma4-server-mlx-31b/             — stock aligned 31B IT"
+        echo "  ../gemma4-server-atomicchat-mlx-31b-2026-07-15/  — stock aligned 31B IT (AtomicChat)"
         echo ""
         exit 0
     }

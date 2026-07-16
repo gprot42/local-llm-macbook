@@ -177,5 +177,5 @@ Kilo Code / Continue.dev  ──→  :8080  vllm-mlx  ──→  gemma-4-31b-jan
 ## Related
 
 - [Heretic uncensored 31B](../gemma4-server-heretic-31b-mlx/README.md) — uniform 4-bit + vision graft  
-- [Stock Gemma 4 31B IT](../../censored/gemma4-server-mlx-31b/) — aligned  
+- [Stock Gemma 4 31B IT AtomicChat 2026-07-15](../../censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) — aligned  
 - [Root README](../../README.md) — all models + Kilo matrix  

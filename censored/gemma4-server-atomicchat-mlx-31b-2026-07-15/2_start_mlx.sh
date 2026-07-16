@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 2_start_mlx.sh — Serve Gemma 4 31B IT (MLX 4-bit) with optional MTP
+# 2_start_mlx.sh — Serve Gemma 4 31B IT AtomicChat (MLX 4-bit) with optional MTP
 #
 # Default: mlx_lm.server without MTP (simpler, more stable for Kilo)
-#   Target:  gemma-4-31b-it-mlx-4bit
+#   Target:  AtomicChat/gemma-4-31B-it-MLX-4bit (2026-07-15 chat-template fix)
+#   Local:   gemma-4-31b-it-atomicchat-mlx-4bit
 #   --with-mtp: mlx_vlm.server + Gemma 4 MTP speculative decoding (~2× decode speed)
 #   Drafter: gemma-4-31b-it-assistant-mlx-bf16 (--draft-kind mtp)
 #   API model "default_model" is aliased to the target via MLX_VLM_DEFAULT_MODEL
@@ -26,9 +27,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-MODEL_DIR="gemma-4-31b-it-mlx-4bit"
-MODEL_ID="gemma-4-31b-it-mlx-4bit"
-HF_REPO="mlx-community/gemma-4-31b-it-4bit"
+MODEL_DIR="gemma-4-31b-it-atomicchat-mlx-4bit"
+MODEL_ID="gemma-4-31b-it-atomicchat-mlx-4bit"
+HF_REPO="AtomicChat/gemma-4-31B-it-MLX-4bit"
 DRAFT_DIR="gemma-4-31b-it-assistant-mlx-bf16"
 DRAFT_HF_REPO="mlx-community/gemma-4-31B-it-assistant-bf16"
 PORT=8080
@@ -191,7 +192,7 @@ if [ "$LOW_MEMORY" = true ]; then
     echo ""
 fi
 
-echo "=== Gemma 4 31B IT (MLX 4-bit) ==="
+echo "=== Gemma 4 31B IT AtomicChat (MLX 4-bit, 2026-07-15) ==="
 echo "→ Model:    $MODEL_DIR"
 echo "→ MTP:      $([ "$ENABLE_MTP" = true ] && echo "enabled (mlx_vlm.server)" || echo "disabled (mlx_lm.server)")"
 echo "→ Endpoint: http://localhost:$PORT/v1"

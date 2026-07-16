@@ -2,7 +2,8 @@
 # =============================================================================
 # 1_setup_download.sh — Download Gemma 4 31B IT (4-bit MLX) and install deps
 #
-# Model:  mlx-community/gemma-4-31b-it-4bit
+# Model:  AtomicChat/gemma-4-31B-it-MLX-4bit
+#         (2026-07-15 rebuild — Google chat-template / tool-calling fixes)
 # MTP:    mlx-community/gemma-4-31B-it-assistant-bf16 (~1 GB drafter, optional)
 # Engine: mlx-lm server by default, or mlx-vlm server with --with-mtp
 #
@@ -14,8 +15,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODEL_DIR="$SCRIPT_DIR/gemma-4-31b-it-mlx-4bit"
-HF_REPO="mlx-community/gemma-4-31b-it-4bit"
+MODEL_DIR="$SCRIPT_DIR/gemma-4-31b-it-atomicchat-mlx-4bit"
+HF_REPO="AtomicChat/gemma-4-31B-it-MLX-4bit"
 DRAFT_DIR="$SCRIPT_DIR/gemma-4-31b-it-assistant-mlx-bf16"
 DRAFT_HF_REPO="mlx-community/gemma-4-31B-it-assistant-bf16"
 SKIP_DOWNLOAD=false
@@ -38,7 +39,7 @@ for arg in "$@"; do
     }
 done
 
-echo "=== Gemma 4 31B IT (MLX 4-bit) — Setup ==="
+echo "=== Gemma 4 31B IT AtomicChat (MLX 4-bit, 2026-07-15) — Setup ==="
 echo "→ Target repo:    $HF_REPO"
 echo "→ Target dir:     $MODEL_DIR"
 echo "→ MTP assistant:  $DRAFT_HF_REPO"

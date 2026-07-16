@@ -6,6 +6,47 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 
 ---
 
+## Modalities (text-only vs multimodal)
+
+**What the stack accepts as input**, not the engine name. `mlx_vlm` / MTP does **not** mean vision: AtomicChat can use `mlx_vlm.server` only for optional **text MTP** (speculative decode).
+
+| Stack | Folder | Input | Notes |
+|-------|--------|-------|-------|
+| **Qwen 3.6 27B mtplx** | `censored/qwen3-6-27b-coder-mtplx/` | **Text only** | Coding default; native MTP heads |
+| **DeepSeek V4 Flash ds4** | `censored/deepseek-v4-flash-ds4/` | **Text only** | Native Metal GGUF |
+| **DeepSeek V4 Flash MLX** | `censored/deepseek-v4-flash-2bit-dq-mlx/` | **Text only** | mlx-lm community path |
+| **Gemma 4 31B AtomicChat** | `censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/` | **Text only** | Language quant + chat template; not a vision package |
+| **DiffusionGemma 26B** | `censored/diffusiongemma4-26b-a4b-mlx/` | **Text + image** | Discrete diffusion VLM; research / image Q&A |
+| **Ornith 1.0 35B** | `censored/ornith-1.0-35b-q8-gguf-ollama/` | **Text only** | Ollama GGUF |
+| **Gemma 4 31B Heretic** | `uncensored/gemma4-server-heretic-31b-mlx/` | **Text + image** | Language is Heretic; vision **grafted** from stock IT (or text-only with `--skip-vision`) |
+| **Gemma 4 31B JANG CRACK** | `uncensored/gemma4-jang-crack-31b-mlx/` | **Text + image** | Vision **native** in checkpoint (no graft step) |
+| **Qwen3-32B Heretic** | `uncensored/qwen3-32b-heretic-mlx/` | **Text only** | Dense Qwen3, not 3.6 |
+| **Qwen3.5-122B Abliterated** | `uncensored/qwen3.5-122b-a10b-abliterated-mlx/` | **Text only** | Large MoE AR path |
+| **Qwen3.5-122B DFlash** | `uncensored/qwen3.5-122b-a10b-dflash-mlx/` | **Text only** | Same target + draft; text OpenAI server |
+| **GLM-4.7 Flash Heretic** | `uncensored/glm-4.7-flash-heretic-gguf-ollama/` | **Text only** | Ollama GGUF |
+
+### Related weights (not always a full stack)
+
+| Weight / role | Modality | Purpose |
+|---------------|----------|---------|
+| `AtomicChat/gemma-4-31B-it-MLX-4bit` | **Text only** | Aligned Gemma target for this AtomicChat folder |
+| `mlx-community/gemma-4-31b-it-4bit` | **Text + image** | Stock multimodal quant; **vision graft source** for Heretic (not the AtomicChat text stack) |
+| `mlx-community/gemma-4-31B-it-assistant-bf16` | **Text draft only** | MTP speculative drafter (~1 GB); not a chat model; optional / skip for reliability |
+| `z-lab/Qwen3.5-122B-A10B-DFlash` | **Text draft only** | DFlash block-diffusion draft; not standalone chat |
+
+### Pick by modality
+
+| You need… | Use |
+|-----------|-----|
+| Text coding / agents | Qwen 3.6, DeepSeek, AtomicChat, Ornith, Qwen3/3.5/GLM stacks |
+| Images in Kilo (attach / paste) | **Heretic** (grafted), **JANG CRACK** (native), or **DiffusionGemma** (vision-first research) |
+| Aligned Gemma text only | **AtomicChat** — do not expect image understanding |
+| Vision weights for grafting | `mlx-community/gemma-4-31b-it-4bit`, not AtomicChat |
+
+Kilo image attach needs a **vision** stack + its server running. See [README.md](README.md) (Image attach) and [DiffusionGemma README](censored/diffusiongemma4-26b-a4b-mlx/README-diffusiongemma4.md).
+
+---
+
 ## Quick chooser
 
 | You want… | Prefer | Avoid |
@@ -32,6 +73,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟢 **Default coding** — snappy agent loops |
+| **Modality** | **Text only** |
 | **Engine / size** | mtplx + built-in MTP heads · ~18 GB MLX 4-bit |
 | **API** | `:8765/v1` · Kilo: `mtplx/qwen3.6-27b-mtplx` |
 
@@ -54,6 +96,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟢 **Great for coding** — quality over latency |
+| **Modality** | **Text only** |
 | **Engine / size** | Native Metal `ds4` · ~81 GB q2-imatrix GGUF |
 | **API** | `:8083/v1` (proxy; server on `:18083`) · Kilo: `ds4/deepseek-v4-flash` |
 
@@ -78,6 +121,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟡 Heavy coding via MLX |
+| **Modality** | **Text only** |
 | **Engine / size** | `mlx_lm` (community V4 fork) · ~97 GB |
 | **API** | `:8082/v1` · Kilo: `deepseek-mlx/deepseek-v4-flash-2bit-dq` |
 
@@ -94,23 +138,27 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 
 ---
 
-### Gemma 4 31B IT stock (`censored/gemma4-server-mlx-31b/`)
+### Gemma 4 31B IT stock AtomicChat (`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`)
 
 | | |
 |--|--|
-| **Role** | 🟢 Aligned Gemma 31B |
-| **Engine / size** | mlx-lm / optional mlx-vlm + MTP · ~4-bit |
-| **API** | `:8080/v1` · Kilo: `openai-compatible/gemma-4-31b-it-mlx-4bit` |
+| **Role** | 🟢 Aligned Gemma 31B (2026-07-15 chat-template / tool-calling fix) |
+| **Modality** | **Text only** (language quant; not multimodal) |
+| **Engine / size** | mlx-lm (default) / optional mlx-vlm + text MTP · AtomicChat 4-bit (~17 GB) |
+| **HF** | `AtomicChat/gemma-4-31B-it-MLX-4bit` |
+| **API** | `:8080/v1` · Kilo: `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` |
 
 **Good for**
 
-- Aligned chat and light agents
-- Optional MTP experiments on Gemma
+- Aligned chat and light agents with updated tool-call / chat templates
+- Optional **text** MTP experiments on Gemma (drafter is not vision)
 
 **Not good for**
 
+- Image / multimodal input (use Heretic, JANG, or DiffusionGemma)
 - Uncensored needs (use Heretic / JANG)
 - Primary coding agent vs Qwen 3.6 / DeepSeek
+- Vision graft source (use `mlx-community/gemma-4-31b-it-4bit` for multimodal shards)
 
 ---
 
@@ -119,6 +167,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟢 Multimodal / research |
+| **Modality** | **Text + image** (diffusion VLM) |
 | **Engine / size** | mlx-vlm diffusion · ~52 GB bf16 |
 | **API** | `:8080/v1` · Kilo: `diffusiongemma/diffusiongemma-26b-a4b-it-bf16` |
 
@@ -139,6 +188,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟢 Guided agent trials |
+| **Modality** | **Text only** |
 | **Engine / size** | Ollama GGUF Q8 · ~37 GB |
 | **API** | `:18082/v1` · Kilo: `ornith/ornith-1.0-35b-q8` |
 
@@ -161,6 +211,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟢 Uncensored chat (uniform 4-bit + vision graft) |
+| **Modality** | **Text + image** (after graft; text-only if `--skip-vision`) |
 | **Engine / size** | vllm-mlx + Kilo proxy · ~20 GB |
 | **API** | `:8080/v1` · Kilo: `openai-compatible/gemma-4-31b-heretic-mlx-4bit` |
 
@@ -181,6 +232,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟡 Strongest low-refusal Gemma path |
+| **Modality** | **Text + image** (native in checkpoint) |
 | **Engine / size** | vllm-mlx · mixed quant, native multimodal |
 | **API** | `:8080/v1` · Kilo: `openai-compatible/gemma-4-31b-jang-crack-mlx` |
 
@@ -201,6 +253,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟢 Uncensored dense **Qwen3** (not 3.6/3.7) |
+| **Modality** | **Text only** |
 | **Engine / size** | mlx_lm · ~22.5 GB 5-bit |
 | **API** | `:8084/v1` · Kilo: `qwen3-heretic/qwen3-32b-heretic-mlx-5bit` |
 
@@ -221,6 +274,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟢 Uncensored large MoE (~10B active) |
+| **Modality** | **Text only** |
 | **Engine / size** | mlx_lm · ~70 GB 4-bit |
 | **API** | `:8085/v1` · Kilo: `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` |
 
@@ -242,6 +296,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟡 Uncensored 122B with **block-diffusion speculative decode** (Kilo agents flaky) |
+| **Modality** | **Text only** (draft is text speculative, not vision) |
 | **Engine / size** | dflash-mlx · same ~65–70 GB target + ~1.5 GB draft |
 | **API** | `:8086/v1` · Kilo: `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` |
 
@@ -268,6 +323,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | | |
 |--|--|
 | **Role** | 🟢 Uncensored MoE coding (Ollama) |
+| **Modality** | **Text only** |
 | **Engine / size** | Ollama GGUF · ~18–32 GB (q4–q8) |
 | **API** | `:18083/v1` · Kilo: `glm/glm-4.7-flash-heretic-q8` |
 

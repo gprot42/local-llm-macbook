@@ -736,7 +736,7 @@ This separates prompt-prefill wait from actual token generation speed.
 
 This project runs `gemma-4-31b-heretic-mlx-4bit`. MTP is not enabled: Heretic 4-bit
 does not ship matching MTP draft-head weights. Use stock IT + MTP in
-`../gemma4-server-mlx-31b/` for speculative-decode experiments.
+`../gemma4-server-atomicchat-mlx-31b-2026-07-15/` for speculative-decode experiments.
 
 ---
 

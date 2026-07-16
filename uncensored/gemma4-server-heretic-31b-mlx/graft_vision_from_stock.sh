@@ -11,7 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 HERETIC_DIR="${1:-gemma-4-31b-heretic-mlx-4bit}"
-STOCK_DIR="${2:-../gemma4-server-mlx-31b/gemma-4-31b-it-mlx-4bit}"
+# Default: local vision cache from 1_setup_download.sh (mlx-community multimodal 4-bit).
+# AtomicChat stock (gemma4-server-atomicchat-mlx-31b-2026-07-15) is text-focused and not a vision source.
+STOCK_DIR="${2:-stock-vision-source}"
 VENV_PY="$SCRIPT_DIR/venv/bin/python"
 
 if [[ ! -x "$VENV_PY" ]]; then
@@ -24,7 +26,8 @@ if [[ ! -d "$HERETIC_DIR" ]]; then
 fi
 if [[ ! -d "$STOCK_DIR" ]]; then
     echo "ERROR: stock model dir not found: $STOCK_DIR" >&2
-    echo "Download stock 31B IT 4-bit first (sibling project gemma4-server-mlx-31b)." >&2
+    echo "Download multimodal stock vision first: run ./1_setup_download.sh" >&2
+    echo "(uses mlx-community/gemma-4-31b-it-4bit — not AtomicChat text quant)." >&2
     exit 1
 fi
 

@@ -11,10 +11,10 @@ Dedicated **31B Heretic** (uncensored / abliterated) setup via **vllm-mlx** on A
 | **RAM** | **80 GB+** unified memory recommended for agent sessions |
 | **API** | `http://localhost:8080/v1` |
 | **Kilo model ID** | `gemma-4-31b-heretic-mlx-4bit` |
-| **Modalities** | Text + image (vision tower grafted from stock `gemma-4-31b-it-mlx-4bit`; language remains Heretic) |
+| **Modalities** | Text + image (vision tower grafted from `mlx-community/gemma-4-31b-it-4bit`; language remains Heretic) |
 
 > Not the stock Google IT weights. For **aligned** 31B IT + optional MTP, use
-> [`../gemma4-server-mlx-31b/`](../gemma4-server-mlx-31b/).
+> [`../gemma4-server-atomicchat-mlx-31b-2026-07-15/`](../gemma4-server-atomicchat-mlx-31b-2026-07-15/).
 
 ---
 
@@ -33,7 +33,7 @@ cd gemma4-server-heretic-31b-mlx
 kilo
 ```
 
-`1_setup_download.sh` pulls `mlx-community/gemma-4-31B-it-uncensored-heretic-4bit` (language-only upstream), then auto-downloads stock vision from `mlx-community/gemma-4-31b-it-4bit` (shard 4 only, or reuses `../gemma4-server-mlx-31b/` if present) and runs `graft_vision_from_stock.sh`. Use `--skip-vision` for a text-only install.
+`1_setup_download.sh` pulls `mlx-community/gemma-4-31B-it-uncensored-heretic-4bit` (language-only upstream), then auto-downloads stock vision from `mlx-community/gemma-4-31b-it-4bit` (multimodal quant; not the AtomicChat text stack) and runs `graft_vision_from_stock.sh`. Use `--skip-vision` for a text-only install. For aligned stock chat, see `../gemma4-server-atomicchat-mlx-31b-2026-07-15/`.
 
 The Kilo steering proxy is **on by default** (Harmony bias, temp floor, tool repair, stall guards). Public API stays `http://localhost:8080/v1`; vllm-mlx listens on `:8090`. For raw vllm-mlx only:
 
@@ -100,7 +100,7 @@ Kilo Code / Continue.dev  ──→  :8080  gemma4_mlx_kilo_proxy.py  ──→ 
 Kilo Code / Continue.dev  ──→  :8080  vllm-mlx  ──→  gemma-4-31b-heretic-mlx-4bit
 ```
 
-vllm-mlx is preferred over raw `mlx_vlm` for continuous batching, paged KV, and dual OpenAI/Anthropic APIs. MTP speculative decoding is **not** used here (Heretic 4-bit has no matching assistant MTP heads). For MTP experiments on **stock** 31B IT, see `../gemma4-server-mlx-31b/`.
+vllm-mlx is preferred over raw `mlx_vlm` for continuous batching, paged KV, and dual OpenAI/Anthropic APIs. MTP speculative decoding is **not** used here (Heretic 4-bit has no matching assistant MTP heads). For MTP experiments on **stock** 31B IT, see `../gemma4-server-atomicchat-mlx-31b-2026-07-15/`.
 
 ---
 
@@ -195,7 +195,7 @@ cp kilo.json ~/.config/kilo/kilo.jsonc
 4. Model ID: **`gemma-4-31b-heretic-mlx-4bit`** (exact)  
 5. Reasoning: **off**
 
-Wrong model IDs (e.g. `gemma-4-31b-it-mlx-4bit` from the stock folder) will not match this server’s local weights.
+Wrong model IDs (e.g. `gemma-4-31b-it-atomicchat-mlx-4bit` from the stock folder) will not match this server’s local weights.
 
 ---
 
@@ -329,7 +329,7 @@ curl -s http://localhost:8080/v1/chat/completions \
 | Symptom | Cause / fix |
 |---------|-------------|
 | Exit **134** / Metal “Insufficient Memory” | Uncatchable C++ abort on GPU OOM. Weights ~20 GB fit; **KV + concurrent Kilo streams** push over the limit. Restart; lower context in `kilo.json` (e.g. 16384); close other MLX servers. |
-| Port 8080 “dead” / wrong model answers | Stale sibling server still bound. **Only one** of: this folder, `gemma4-server-mlx-31b`, diffusion, etc. on `:8080`. Use `./2_start_mlx.sh restart`. |
+| Port 8080 “dead” / wrong model answers | Stale sibling server still bound. **Only one** of: this folder, `gemma4-server-atomicchat-mlx-31b-2026-07-15`, diffusion, etc. on `:8080`. Use `./2_start_mlx.sh restart`. |
 | OOM on 64 GB Macs | 31B is aimed at **80 GB+** unified memory. Close other MLX servers and lower context in `kilo.json`. |
 | Continuous batching | Default **off** for single-user throughput. Enable `--batching` only if you need multi-client and have headroom (128 GB+). |
 | Reasoning checked in Kilo | Can encourage long CoT loops — leave Kilo’s Reasoning UI **off**. Server-side `--reasoning-parser gemma4` (default) is different: it *strips* channel thought into `reasoning_content` so tools parse cleanly. |
@@ -358,7 +358,7 @@ Stack: **vllm-mlx 0.4+** (Gemma 4 text path + logit_bias upstream) plus a small 
 | Folder | Model | Stack |
 |--------|-------|-------|
 | **This** | 31B Heretic 4-bit | vllm-mlx 0.4+ + Kilo proxy (default on) |
-| [`../gemma4-server-mlx-31b/`](../gemma4-server-mlx-31b/) | 31B **IT** 4-bit (aligned) | mlx-lm / mlx-vlm + optional MTP |
+| [`../gemma4-server-atomicchat-mlx-31b-2026-07-15/`](../gemma4-server-atomicchat-mlx-31b-2026-07-15/) | 31B **IT** AtomicChat 4-bit (aligned, 2026-07-15) | mlx-lm / mlx-vlm + optional MTP |
 | [`../qwen3-6-27b-coder-mtplx/`](../qwen3-6-27b-coder-mtplx/) | Qwen3.6 27B | mtplx MTP coding |
 
 Broader guides: [README.md](../README.md), [README-diffusiongemma4.md](../README-diffusiongemma4.md).

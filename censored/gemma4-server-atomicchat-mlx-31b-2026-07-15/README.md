@@ -1,11 +1,36 @@
-# Gemma 4 31B IT — MLX + Kilo Code
+# Gemma 4 31B IT AtomicChat — MLX + Kilo Code (2026-07-15)
 
-Run **Gemma 4 31B IT (4-bit)** locally via **mlx-lm** by default, or opt into **mlx-vlm** with **MTP speculative decoding**.
+Run **Gemma 4 31B IT (4-bit)** from **[AtomicChat/gemma-4-31B-it-MLX-4bit](https://huggingface.co/AtomicChat/gemma-4-31B-it-MLX-4bit)** locally via **mlx-lm** by default, or opt into **mlx-vlm** with **MTP speculative decoding**.
+
+This folder is the **2026-07-15** stock stack update: Google’s Gemma 4 chat-template / tool-calling refresh, re-quantized by AtomicChat with **mlx-lm 0.31.3**. It replaces the older `mlx-community/gemma-4-31b-it-4bit` snapshot (last rebuilt ~2026-07-05 with the pre-fix template).
+
+| | |
+|--|--|
+| **HF target** | `AtomicChat/gemma-4-31B-it-MLX-4bit` |
+| **Local dir** | `gemma-4-31b-it-atomicchat-mlx-4bit` (~17 GB) |
+| **Modalities** | **Text only** (not multimodal) |
+| **Kilo model ID** | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` |
+| **API** | `http://localhost:8080/v1` |
+| **Why this quant** | Ships Google’s updated `chat_template.jinja` (null handling, reasoning preservation, turn-tag balance, tool-call fixes) |
+
+## Models & modalities
+
+| Weight / role | Local dir / HF | Modalities | Role |
+|---------------|----------------|------------|------|
+| **Target (this stack)** | `gemma-4-31b-it-atomicchat-mlx-4bit` · `AtomicChat/gemma-4-31B-it-MLX-4bit` | **Text only** | Full chat model (language + updated chat template). Default server: `mlx_lm.server`. |
+| **MTP assistant (optional)** | `gemma-4-31b-it-assistant-mlx-bf16` · `mlx-community/gemma-4-31B-it-assistant-bf16` | **Text draft only** | Speculative drafter (~1 GB). Not a chat model; not vision. Only used with `./2_start_mlx.sh --with-mtp`. Skip for reliability (`--skip-mtp-download`). |
+| **Stock multimodal (elsewhere)** | `mlx-community/gemma-4-31b-it-4bit` | **Text + image** | Multimodal quant; vision graft source for Heretic. **Not** this AtomicChat text package. |
+| **Uncensored + vision** | Heretic / JANG stacks under `uncensored/` | **Text + image** | See monorepo [README-models.md](../../README-models.md) modality matrix. |
+| **Diffusion VLM** | `censored/diffusiongemma4-26b-a4b-mlx/` | **Text + image** | Image Q&A / research — not this folder. |
+
+**Do not confuse engines with modalities:** optional `--with-mtp` runs `mlx_vlm.server` for **text** speculative decode only. AtomicChat still has **no image understanding**. Prefer default `mlx_lm.server` for agents.
+
+Full repo matrix (every stack): [README-models.md — Modalities](../../README-models.md#modalities-text-only-vs-multimodal).
 
 ## Quick start
 
 ```bash
-# 1. Download target (~20 GB) + MTP assistant (~1 GB) and install deps
+# 1. Download target (~17 GB) + MTP assistant (~1 GB) and install deps
 ./1_setup_download.sh
 
 # 2. Start the OpenAI-compatible server on :8080 (no MTP by default)
@@ -21,7 +46,7 @@ kilo
 **Default (MTP off):**
 
 ```
-Kilo Code ──→ mlx_lm.server ──→ gemma-4-31b-it-mlx-4bit
+Kilo Code ──→ mlx_lm.server ──→ gemma-4-31b-it-atomicchat-mlx-4bit
 ```
 
 **With MTP (`./2_start_mlx.sh --with-mtp`):**
@@ -32,30 +57,30 @@ Kilo Code (TUI)
       ▼  http://localhost:8080/v1   (OpenAI-compatible)
   mlx_vlm.server
       │  speculative decode: --draft-kind mtp
-      ├── target:  gemma-4-31b-it-mlx-4bit        (~20 GB, 4-bit)
-      └── drafter: gemma-4-31b-it-assistant-mlx-bf16  (~1 GB, shares K/V)
+      ├── target:  gemma-4-31b-it-atomicchat-mlx-4bit  (~17 GB, 4-bit)
+      └── drafter: gemma-4-31b-it-assistant-mlx-bf16     (~1 GB, shares K/V)
 ```
 
 MTP uses Google's [Gemma 4 assistant drafter](https://ai.google.dev/gemma/docs/mtp/mtp) built into mlx-vlm. Measured greedy speedups on Apple Silicon are up to **~2.3×** on the 31B model at block size 4 (decode only; long agent prefill is unchanged). It is opt-in because the non-MTP server is simpler and more stable for Kilo agent work.
 
 ### MTP pairing (target + assistant)
 
-`gemma-4-31b-it-assistant-mlx-bf16` is the official MTP drafter for **`google/gemma-4-31b-it`**. It is compatible with the 4-bit MLX target in this repo:
+`gemma-4-31b-it-assistant-mlx-bf16` is the official MTP drafter for **`google/gemma-4-31B-it`**. It is intended to pair with this AtomicChat 4-bit target:
 
-| | Target `gemma-4-31b-it-mlx-4bit` | Assistant `gemma-4-31b-it-assistant-mlx-bf16` |
+| | Target `gemma-4-31b-it-atomicchat-mlx-4bit` | Assistant `gemma-4-31b-it-assistant-mlx-bf16` |
 |---|---|---|
 | Role | Full model (quality) | Small drafter (~4 layers, ~1 GB) |
 | Quantization | 4-bit (memory) | bf16 (size is small either way) |
 | Hidden size | 5376 | `backbone_hidden_size` 5376 (must match) |
 | Vocabulary | 262,144 | 262,144 (same tokenizer) |
 
-The assistant does not replace the target — it only proposes tokens; the 31B model verifies them and shares K/V. Use the **27B assistant** only if you switch the target to `gemma-4-27b-it-4bit`. At `temperature=0`, output should match non-MTP greedy generation.
+The assistant does not replace the target — it only proposes tokens; the 31B model verifies them and shares K/V. At `temperature=0`, output should match non-MTP greedy generation.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `1_setup_download.sh` | Create venv, install mlx/mlx-lm/mlx-vlm, download target + MTP assistant |
+| `1_setup_download.sh` | Create venv, install mlx/mlx-lm/mlx-vlm, download AtomicChat target + MTP assistant |
 | `2_start_mlx.sh` | Start server on port 8080 (no MTP by default; pass `--with-mtp` to enable) |
 | `apply_local_patches.sh` | Copy `patches/` into the venv on each start (survives `pip install -U`) |
 | `kilo.json` | Kilo Code config for this project |
@@ -69,14 +94,14 @@ The assistant does not replace the target — it only proposes tokens; the 31B m
 Launch Kilo from **this directory** so `kilo.json` is picked up:
 
 ```bash
-cd gemma4-server-mlx-31b
+cd gemma4-server-atomicchat-mlx-31b-2026-07-15
 ./2_start_mlx.sh    # terminal 1
 kilo                # terminal 2 — same directory
 ```
 
 | Setting | Value | Why |
 |---------|-------|-----|
-| Model ID | `gemma-4-31b-it-mlx-4bit` | Recommended; matches the local server model |
+| Model ID | `gemma-4-31b-it-atomicchat-mlx-4bit` | Recommended; matches the local server model |
 | Model ID (alt.) | `default_model` | Also works — mapped to the same local weights at startup |
 | Context limit | 32k | Faster prefill; fits agent sessions without OOM |
 | Output limit | 8k | Enough for edits; reduces truncated tool JSON |
@@ -94,7 +119,7 @@ kilo                # terminal 2 — same directory
 ./2_start_mlx.sh --with-mtp
 ```
 
-Uses `mlx_vlm.server` plus the Gemma 4 assistant drafter. This can improve decode throughput, but Kilo wall-clock speed also includes prompt prefill, tool calls, edits, and file IO.
+Uses `mlx_vlm.server` plus the Gemma 4 assistant drafter. This can improve decode throughput, but Kilo wall-clock speed also includes prompt prefill, tool calls, edits, and file IO. If MTP fails to load this AtomicChat quant under mlx-vlm, stay on the default `mlx_lm.server` path.
 
 ### MTP block size
 
@@ -127,13 +152,13 @@ Then update `kilo.json`:
 
 ```bash
 source venv/bin/activate
-mlx_lm.generate --model gemma-4-31b-it-mlx-4bit --prompt "Hello, who are you?"
+mlx_lm.generate --model gemma-4-31b-it-atomicchat-mlx-4bit --prompt "Hello, who are you?"
 ```
 
 MTP CLI test (loads both models):
 
 ```bash
-mlx_vlm.generate --model gemma-4-31b-it-mlx-4bit \
+mlx_vlm.generate --model gemma-4-31b-it-atomicchat-mlx-4bit \
   --draft-model gemma-4-31b-it-assistant-mlx-bf16 \
   --draft-kind mtp --draft-block-size 4 \
   --prompt "Say hi in one sentence." --max-tokens 32 --temperature 0.35
@@ -148,13 +173,20 @@ curl http://localhost:8080/v1/models
 # Chat — explicit model id
 curl -s http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"gemma-4-31b-it-mlx-4bit","messages":[{"role":"user","content":"Say hi"}],"max_tokens":16}'
+  -d '{"model":"gemma-4-31b-it-atomicchat-mlx-4bit","messages":[{"role":"user","content":"Say hi"}],"max_tokens":16}'
 
 # Chat — default_model alias (Kilo / Cursor style)
 curl -s http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"default_model","messages":[{"role":"user","content":"Say hi"}],"max_tokens":16}'
 ```
+
+## Changelog (this folder)
+
+| Date | Change |
+|------|--------|
+| **2026-07-15** | Switched target to `AtomicChat/gemma-4-31B-it-MLX-4bit` (Google chat-template / tool-calling fixes). Folder: `gemma4-server-atomicchat-mlx-31b-2026-07-15` (was `gemma4-server-mlx-31b`). Kilo model id: `gemma-4-31b-it-atomicchat-mlx-4bit`. |
+| earlier | Stock stack on `mlx-community/gemma-4-31b-it-4bit` + optional MTP |
 
 ## Troubleshooting
 
@@ -177,11 +209,11 @@ hf download mlx-community/gemma-4-31B-it-assistant-bf16 \
 
 Some clients send `"model": "default_model"` (mlx_lm convention). Upstream `mlx_vlm.server` treated that as a HuggingFace repo id, unloaded the local weights, and failed with `Repository Not Found`.
 
-Fix: restart so patches apply (`./2_start_mlx.sh restart`). You should see `Using cached model: gemma-4-31b-it-mlx-4bit` on chat requests, not `Loading model from: default_model`.
+Fix: restart so patches apply (`./2_start_mlx.sh restart`). You should see `Using cached model: gemma-4-31b-it-atomicchat-mlx-4bit` on chat requests, not `Loading model from: default_model`.
 
 **`model not found` in Kilo**
 
-Use `openai-compatible/gemma-4-31b-it-mlx-4bit` as in `kilo.json`, or ensure the OpenAI provider `baseURL` is `http://localhost:8080/v1` while `./2_start_mlx.sh` is running.
+Use `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` as in `kilo.json`, or ensure the OpenAI provider `baseURL` is `http://localhost:8080/v1` while `./2_start_mlx.sh` is running.
 
 **MTP crash / hung server after first error**
 
@@ -231,9 +263,9 @@ What the crash report means:
 | Thread 31 `com.Metal.CompletionQueueDispatch` | GPU driver finished a command buffer with an OOM error |
 | `mlx::core::gpu::check_error` | MLX detected the Metal failure and aborted |
 | `asyncio_0` / `asyncio_1` / AnyIO workers | Often overlapping Kilo chat streams hitting the same server |
-| ~5 min uptime then crash | Weights fit (~20 GB), but **KV cache + MTP + concurrent requests** pushed unified memory over the limit |
+| ~5 min uptime then crash | Weights fit (~17 GB), but **KV cache + MTP + concurrent requests** pushed unified memory over the limit |
 
-The 31B 4-bit target needs ~20 GB for weights; the MTP assistant adds ~1 GB; **long or concurrent agent sessions** add much more for KV cache. On **24 GB** Macs (common for `Mac17,7`-class hardware), 32k context + MTP + parallel tool rounds is often too much.
+The 31B 4-bit target needs ~17 GB for weights; the MTP assistant adds ~1 GB; **long or concurrent agent sessions** add much more for KV cache. On **24 GB** Macs (common for `Mac17,7`-class hardware), 32k context + MTP + parallel tool rounds is often too much.
 
 Mitigations (try in order):
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "qwen35-122b-dflash/qwen3.5-122b-a10b-dflash",
+  "model": "openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit",
   "agent": {
     "build": {
       "temperature": 0.6,
@@ -71,6 +71,22 @@
         "chunkTimeout": 300000
       },
       "models": {
+        "gemma-4-31b-it-atomicchat-mlx-4bit": {
+          "name": "Gemma 4 31B IT AtomicChat (MLX 4-bit, 2026-07-15) \u2014 text only, aligned stock",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
         "gemma-4-31b-jang-crack-mlx": {
           "name": "\ud83d\udfe1 Gemma 4 31B JANG_4M CRACK (MLX) \u2014 uncensored but Kilo may filter; ~64\u201380 GB RAM",
           "attachment": true,

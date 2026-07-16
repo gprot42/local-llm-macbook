@@ -63,7 +63,7 @@ for arg in "$@"; do
         echo "  Kilo Code / Continue.dev ─→ :8080 vllm-mlx"
         echo ""
         echo "Related projects:"
-        echo "  ../gemma4-server-mlx-31b/          — stock 31B IT + optional MTP (not Heretic)"
+        echo "  ../gemma4-server-atomicchat-mlx-31b-2026-07-15/ — stock 31B IT AtomicChat + optional MTP (not Heretic)"
         echo ""
         exit 0
     }
@@ -80,7 +80,7 @@ for arg in "$@"; do
     if [[ "$arg" == "26b" || "$arg" == "26B" || "$arg" == "31b" || "$arg" == "31B" ]]; then
         if [[ "$arg" == "26b" || "$arg" == "26B" ]]; then
             echo "ERROR: This project is 31B-only."
-            echo "  Stock 31B IT: cd ../gemma4-server-mlx-31b && ./2_start_mlx.sh"
+            echo "  Stock 31B IT: cd ../gemma4-server-atomicchat-mlx-31b-2026-07-15 && ./2_start_mlx.sh"
             exit 1
         fi
         # 31b is the only model here — ignore for convenience if someone passes it.

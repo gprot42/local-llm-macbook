@@ -10,25 +10,25 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 
 ### Censored (aligned)
 
-| Folder | Select this model (Kilo) | Role | API |
-|--------|--------------------------|------|-----|
-| [`censored/qwen3-6-27b-coder-mtplx/`](censored/qwen3-6-27b-coder-mtplx/) | `mtplx/qwen3.6-27b-mtplx` | 🟢 **Default coding** — Qwen 3.6 27B (mtplx MTP) | `:8765/v1` |
-| [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `ds4/deepseek-v4-flash` | 🟢 **Great for coding** (128 GB, native Metal) | `:8083/v1` |
-| [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `deepseek-mlx/deepseek-v4-flash-2bit-dq` | 🟡 **Heavy coding** (128 GB, MLX) | `:8082/v1` |
-| [`censored/gemma4-server-mlx-31b/`](censored/gemma4-server-mlx-31b/) | `openai-compatible/gemma-4-31b-it-mlx-4bit` | 🟢 Stock Gemma 4 31B IT | `:8080/v1` |
-| [`censored/diffusiongemma4-26b-a4b-mlx/`](censored/diffusiongemma4-26b-a4b-mlx/) | `diffusiongemma/diffusiongemma-26b-a4b-it-bf16` | 🟢 Multimodal / research | `:8080/v1` |
-| [`censored/ornith-1.0-35b-q8-gguf-ollama/`](censored/ornith-1.0-35b-q8-gguf-ollama/) | `ornith/ornith-1.0-35b-q8` | 🟢 Guided agent trials | `:18082/v1` |
+| Folder | Select this model (Kilo) | Role | Modalities | API |
+|--------|--------------------------|------|------------|-----|
+| [`censored/qwen3-6-27b-coder-mtplx/`](censored/qwen3-6-27b-coder-mtplx/) | `mtplx/qwen3.6-27b-mtplx` | 🟢 **Default coding** — Qwen 3.6 27B (mtplx MTP) | Text | `:8765/v1` |
+| [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `ds4/deepseek-v4-flash` | 🟢 **Great for coding** (128 GB, native Metal) | Text | `:8083/v1` |
+| [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `deepseek-mlx/deepseek-v4-flash-2bit-dq` | 🟡 **Heavy coding** (128 GB, MLX) | Text | `:8082/v1` |
+| [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` | 🟢 Stock Gemma 4 31B IT (AtomicChat 2026-07-15) | Text | `:8080/v1` |
+| [`censored/diffusiongemma4-26b-a4b-mlx/`](censored/diffusiongemma4-26b-a4b-mlx/) | `diffusiongemma/diffusiongemma-26b-a4b-it-bf16` | 🟢 Multimodal / research | **Text + image** | `:8080/v1` |
+| [`censored/ornith-1.0-35b-q8-gguf-ollama/`](censored/ornith-1.0-35b-q8-gguf-ollama/) | `ornith/ornith-1.0-35b-q8` | 🟢 Guided agent trials | Text | `:18082/v1` |
 
 ### Uncensored
 
-| Folder | Select this model (Kilo) | Role | API |
-|--------|--------------------------|------|-----|
-| [`uncensored/gemma4-jang-crack-31b-mlx/`](uncensored/gemma4-jang-crack-31b-mlx/) | `openai-compatible/gemma-4-31b-jang-crack-mlx` | 🟡 Uncensored chat (JANG) | `:8080/v1` |
-| [`uncensored/gemma4-server-heretic-31b-mlx/`](uncensored/gemma4-server-heretic-31b-mlx/) | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` | 🟢 Uncensored chat (Heretic) | `:8080/v1` |
-| [`uncensored/qwen3-32b-heretic-mlx/`](uncensored/qwen3-32b-heretic-mlx/) | `qwen3-heretic/qwen3-32b-heretic-mlx-5bit` | 🟢 Uncensored dense 32B (MLX; not 3.6/3.7) | `:8084/v1` |
-| [`uncensored/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/qwen3.5-122b-a10b-abliterated-mlx/) | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` | 🟢 Uncensored MoE 122B (MLX) | `:8085/v1` |
-| [`uncensored/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/qwen3.5-122b-a10b-dflash-mlx/) | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` | 🟡 Uncensored 122B + **DFlash** (fast decode; Kilo agents flaky) | `:8086/v1` |
-| [`uncensored/glm-4.7-flash-heretic-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-gguf-ollama/) | `glm/glm-4.7-flash-heretic-q8` | 🟢 Uncensored MoE (Ollama) | `:18083/v1` |
+| Folder | Select this model (Kilo) | Role | Modalities | API |
+|--------|--------------------------|------|------------|-----|
+| [`uncensored/gemma4-jang-crack-31b-mlx/`](uncensored/gemma4-jang-crack-31b-mlx/) | `openai-compatible/gemma-4-31b-jang-crack-mlx` | 🟡 Uncensored chat (JANG) | **Text + image** | `:8080/v1` |
+| [`uncensored/gemma4-server-heretic-31b-mlx/`](uncensored/gemma4-server-heretic-31b-mlx/) | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` | 🟢 Uncensored chat (Heretic) | **Text + image** | `:8080/v1` |
+| [`uncensored/qwen3-32b-heretic-mlx/`](uncensored/qwen3-32b-heretic-mlx/) | `qwen3-heretic/qwen3-32b-heretic-mlx-5bit` | 🟢 Uncensored dense 32B (MLX; not 3.6/3.7) | Text | `:8084/v1` |
+| [`uncensored/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/qwen3.5-122b-a10b-abliterated-mlx/) | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` | 🟢 Uncensored MoE 122B (MLX) | Text | `:8085/v1` |
+| [`uncensored/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/qwen3.5-122b-a10b-dflash-mlx/) | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` | 🟡 Uncensored 122B + **DFlash** (fast decode; Kilo agents flaky) | Text | `:8086/v1` |
+| [`uncensored/glm-4.7-flash-heretic-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-gguf-ollama/) | `glm/glm-4.7-flash-heretic-q8` | 🟢 Uncensored MoE (Ollama) | Text | `:18083/v1` |
 
 **Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Qwen 3.6 mtplx (`8765`), Ornith (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB.
 
@@ -52,7 +52,7 @@ cd censored/qwen3-6-27b-coder-mtplx
 
 Other stacks: `1_*` setup/download → `2_*` start → select the model ID for that folder (table above). Details in each directory’s README.
 
-Root [`kilo.json`](kilo.json) currently defaults to **`glm/glm-4.7-flash-heretic-q8`** (uncensored Ollama). Switch `"model"` to any ID from the table above, or copy a stack’s local `kilo.json`.
+Root [`kilo.json`](kilo.json) currently defaults to **`openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit`** (aligned stock Gemma text). Install globally with `cp kilo.json ~/.config/kilo/kilo.jsonc`. Switch `"model"` to any ID from the table above, or copy a stack’s local `kilo.json`.
 
 ---
 
@@ -99,7 +99,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 | 🟢 | [`censored/qwen3-6-27b-coder-mtplx/`](censored/qwen3-6-27b-coder-mtplx/) | `http://localhost:8765/v1` | `mtplx/qwen3.6-27b-mtplx` |
 | 🟢 | [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `http://127.0.0.1:8083/v1` | `ds4/deepseek-v4-flash` |
 | 🟡 | [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `http://127.0.0.1:8082/v1` | `deepseek-mlx/deepseek-v4-flash-2bit-dq` |
-| 🟢 | [`censored/gemma4-server-mlx-31b/`](censored/gemma4-server-mlx-31b/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-it-mlx-4bit` |
+| 🟢 | [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` |
 | 🟢 | [`censored/diffusiongemma4-26b-a4b-mlx/`](censored/diffusiongemma4-26b-a4b-mlx/) | `http://localhost:8080/v1` | `diffusiongemma/diffusiongemma-26b-a4b-it-bf16` |
 | 🟢 | [`censored/ornith-1.0-35b-q8-gguf-ollama/`](censored/ornith-1.0-35b-q8-gguf-ollama/) | `http://127.0.0.1:18082/v1` | `ornith/ornith-1.0-35b-q8` |
 
@@ -122,7 +122,7 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 
 ## More docs
 
-- **[README-models.md](README-models.md)** — good / not-good use cases for every stack, plus DFlash compatibility notes
+- **[README-models.md](README-models.md)** — **text-only vs multimodal** matrix, good / not-good use cases, DFlash notes
 
 **Censored (aligned)**
 
@@ -130,7 +130,7 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 - [deepseek-v4-flash-ds4/README.md](censored/deepseek-v4-flash-ds4/README.md) — V4 Flash via antirez/ds4 (native Metal, resumable ~81 GB download)  
 - [deepseek-v4-flash-2bit-dq-mlx/README.md](censored/deepseek-v4-flash-2bit-dq-mlx/README.md) — V4 Flash / community mlx-lm  
 - [diffusiongemma4 README](censored/diffusiongemma4-26b-a4b-mlx/README-diffusiongemma4.md) · [ornith README](censored/ornith-1.0-35b-q8-gguf-ollama/README.md)  
-- [gemma4 stock IT](censored/gemma4-server-mlx-31b/README.md)  
+- [gemma4 stock IT AtomicChat 2026-07-15](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/README.md)  
 
 
 **Uncensored**

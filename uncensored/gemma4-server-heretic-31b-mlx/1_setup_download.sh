@@ -37,16 +37,16 @@ for arg in "$@"; do
             echo "Multimodal note:"
             echo "  mlx-community Heretic 4-bit ships language weights only. This script also"
             echo "  downloads stock vision (~2.3 GB shard 4) from mlx-community/gemma-4-31b-it-4bit"
-            echo "  (or reuses ../gemma4-server-mlx-31b/ if present) and grafts vision_tower +"
+            echo "  (or reuses a local stock-vision cache if present) and grafts vision_tower +"
             echo "  embed_vision into Heretic. Language stays uncensored Heretic."
             echo ""
             echo "For full stock 31B IT (aligned, not Heretic):"
-            echo "  ../gemma4-server-mlx-31b/"
+            echo "  ../gemma4-server-atomicchat-mlx-31b-2026-07-15/  (stock IT chat; vision still from mlx-community)"
             exit 0
             ;;
         26b|26B)
             echo "ERROR: This project is 31B-only."
-            echo "  Stock 31B IT: ../gemma4-server-mlx-31b/"
+            echo "  Stock 31B IT: ../gemma4-server-atomicchat-mlx-31b-2026-07-15/"
             exit 1
             ;;
     esac
@@ -55,8 +55,9 @@ done
 MODEL_DIR="$SCRIPT_DIR/gemma-4-31b-heretic-mlx-4bit"
 HF_REPO="mlx-community/gemma-4-31B-it-uncensored-heretic-4bit"
 # Stock IT 4-bit — source of vision_tower + embed_vision (Heretic HF package omits them)
+# Vision still comes from mlx-community multimodal 4-bit (AtomicChat stock is text-focused).
 STOCK_VISION_REPO="mlx-community/gemma-4-31b-it-4bit"
-STOCK_SIBLING_DIR="$SCRIPT_DIR/../gemma4-server-mlx-31b/gemma-4-31b-it-mlx-4bit"
+STOCK_SIBLING_DIR="$SCRIPT_DIR/stock-vision-source"
 STOCK_CACHE_DIR="$SCRIPT_DIR/stock-vision-source"
 
 echo "=== Gemma 4 31B Heretic Uncensored — Setup ==="

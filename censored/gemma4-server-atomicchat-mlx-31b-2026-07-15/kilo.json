@@ -1,6 +1,6 @@
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "openai-compatible/gemma-4-31b-it-mlx-4bit",
+  "model": "openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit",
   "agent": {
     "build": {
       "temperature": 0.35,
@@ -20,12 +20,20 @@
   "provider": {
     "openai-compatible": {
       "options": {
-        "baseURL": "http://localhost:8080/v1"
+        "apiKey": "local",
+        "baseURL": "http://localhost:8080/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
       },
       "models": {
-        "gemma-4-31b-it-mlx-4bit": {
-          "name": "Gemma 4 31B IT (MLX 4-bit) — local server",
+        "gemma-4-31b-it-atomicchat-mlx-4bit": {
+          "name": "Gemma 4 31B IT AtomicChat (MLX 4-bit, 2026-07-15) — text only, aligned stock",
           "tool_call": true,
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          },
           "limit": {
             "context": 32768,
             "output": 8192

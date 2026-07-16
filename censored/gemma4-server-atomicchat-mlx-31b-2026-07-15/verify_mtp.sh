@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-8080}"
 HOST="${HOST:-127.0.0.1}"
-MODEL_ID="${MODEL_ID:-gemma-4-31b-it-mlx-4bit}"
+MODEL_ID="${MODEL_ID:-gemma-4-31b-it-atomicchat-mlx-4bit}"
 
 echo "=== MTP verification (http://${HOST}:${PORT}/v1) ==="
 echo ""
