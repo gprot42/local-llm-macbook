@@ -57,7 +57,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 # Defaults
 # ---------------------------------------------------------------------------
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UA = os.environ.get("RESEARCH_UA", "Mozilla/5.0")
 DEFAULT_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "30"))
@@ -436,6 +436,16 @@ def warn_url_hygiene(url: str) -> list[str]:
         warns.append(
             "DevSite: use this tool or curl -A 'Mozilla/5.0' — not Kilo webfetch"
         )
+    if "googlesource.com" in url and "/+branch/" in url:
+        warns.append(
+            "Gitiles has no /+branch/… — use /+/HEAD/ or /+/refs/heads/BRANCH/ "
+            "(e.g. …/shusky-kernels/6.1/+/HEAD/)"
+        )
+    if "shusky-kernels" in url and "drivers/usb" in url:
+        warns.append(
+            "shusky-kernels is prebuilt package dirs (trunk-*), not full kernel source; "
+            "dwc3 lives under kernel/common/+/…/drivers/usb/dwc3/"
+        )
     return warns
 
 
@@ -553,11 +563,31 @@ def resolve_variants(url: str) -> list[dict[str, str]]:
             add(u + "/", "googlesource trailing slash")
         if "googlesource.com" in u and u.endswith("/") and u.rstrip("/").count("/") >= 3:
             add(u.rstrip("/"), "googlesource no trailing slash")
+        # Wrong: /+branch/NAME  →  /+/refs/heads/NAME  or /+/NAME
+        m = re.search(
+            r"(https?://[^/]*googlesource\.com/[^?]+)/\+branch/([^/?#]+)/?(.*)$",
+            u,
+        )
+        if m:
+            root, br, rest = m.group(1).rstrip("/"), m.group(2), (m.group(3) or "").strip("/")
+            suffix = f"/{rest}" if rest else ""
+            add(f"{root}/+/refs/heads/{br}{suffix}", "fix +branch → +/refs/heads/")
+            add(f"{root}/+/{br}{suffix}", "fix +branch → +/BRANCH")
+            add(f"{root}/+/HEAD{suffix}", "try HEAD instead of named branch")
+            if rest:
+                # prebuilt packages rarely contain drivers/usb
+                if "drivers/" in rest:
+                    add(
+                        f"https://android.googlesource.com/kernel/common/+/HEAD/{rest}",
+                        "dwc3/drivers usually in kernel/common not device prebuilts",
+                    )
         # googlesource often needs /+/HEAD or /+/refs/heads/main for browse
-        if "googlesource.com" in u and "/+/" not in u:
+        if "googlesource.com" in u and "/+/" not in u and "/+branch/" not in u:
             base = u.rstrip("/")
-            add(base + "/+/HEAD", "googlesource /+/HEAD")
-            add(base + "/+/refs/heads/main", "googlesource main ref")
+            # only for bare repo roots (no path after project)
+            if re.search(r"googlesource\.com/[^/]+(?:/[^/]+)*/?$", base):
+                add(base + "/+/HEAD/", "googlesource /+/HEAD/")
+                add(base + "/+/refs/heads/main/", "googlesource main ref")
 
         if u.startswith("http://"):
             add("https://" + u[len("http://") :], "force https")
@@ -1289,6 +1319,20 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             f"effective={r.get('url_effective')} {r.get('error','')}",
             file=sys.stderr,
         )
+        if "googlesource.com" in url and "/+branch/" in url:
+            print(
+                "# Gitiles tip: /+branch/X is invalid. Try:\n"
+                f"#   {sys.argv[0]} probe '{url}'\n"
+                f"#   {sys.argv[0]} fetch '…/REPO/+/HEAD/'\n"
+                f"#   {sys.argv[0]} fetch '…/REPO/+/refs/heads/main/'",
+                file=sys.stderr,
+            )
+        if "shusky-kernels" in url and "drivers/" in url:
+            print(
+                "# shusky-kernels is prebuilts only. USB source:\n"
+                f"#   {sys.argv[0]} paths dwc3 --repo kernel/common",
+                file=sys.stderr,
+            )
         if args.json:
             emit({k: v for k, v in r.items() if k != "body"}, as_json=True)
         return 1
@@ -1328,6 +1372,40 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             f"# Prefer: {sys.argv[0]} grep PATTERN '{url}'\n"
             f"# Full HTML: {sys.argv[0]} fetch --raw --out /tmp/page.html '{url}'\n"
         )
+        gitiles_extra = ""
+        gitiles_entries: list[str] = []
+        if "googlesource.com" in url:
+            tree_url = url
+            if "/+/" not in tree_url:
+                tree_url = url.rstrip("/") + "/+/HEAD/"
+            listing = list_gitiles_dir(
+                tree_url,
+                timeout=args.timeout,
+                use_cache=not args.no_cache,
+                max_age=args.cache_max_age,
+            )
+            if listing.get("ok") and listing.get("entries"):
+                gitiles_entries = [
+                    f"{e.get('type', '?')}:{e.get('name')}"
+                    for e in listing["entries"][:80]
+                ]
+                gitiles_extra = (
+                    f"# gitiles tree entries ({len(listing.get('entries') or [])}) "
+                    f"from {tree_url}\n"
+                    f"#   " + ", ".join(gitiles_entries) + "\n"
+                )
+                if "shusky-kernels" in url or "shusky-kernel" in url:
+                    gitiles_extra += (
+                        "# note: device/*-kernels packages are prebuilt trunks "
+                        "(not full Linux source). No drivers/usb/dwc3 here.\n"
+                        f"# USB/dwc3 source: {sys.argv[0]} paths dwc3 "
+                        f"--repo kernel/common\n"
+                    )
+            elif "/+branch/" in url:
+                gitiles_extra = (
+                    "# invalid Gitiles /+branch/ — use /+/HEAD/ or "
+                    "/+/refs/heads/BRANCH/\n"
+                )
         if args.json:
             emit(
                 {
@@ -1338,11 +1416,14 @@ def cmd_fetch(args: argparse.Namespace) -> int:
                     "mode": "readable",
                     "bytes": len(body),
                     "from_cache": r.get("from_cache"),
+                    "gitiles_entries": gitiles_entries,
                 },
                 as_json=True,
             )
         else:
             sys.stdout.write(meta)
+            if gitiles_extra:
+                sys.stdout.write(gitiles_extra)
             sys.stdout.write(plain)
             if not plain.endswith("\n"):
                 sys.stdout.write("\n")
