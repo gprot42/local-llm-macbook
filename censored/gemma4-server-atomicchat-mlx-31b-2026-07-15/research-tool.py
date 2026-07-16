@@ -11,6 +11,7 @@ Commands (see --help and `research-tool.py help`):
   fetch       Download body (capped / cached / optional save)
   grep        Fetch URL(s) and search; agent-friendly snippets (not raw HTML)
   repos       Search android.googlesource.com repo index by name (use instead of grepping /)
+  paths       Probe known kernel trees for a path/driver (dwc3, drivers/usb/…)
   resolve     Suggest corrected URL variants (no network, or --probe)
   probe       Try variants until one returns 200; stop spraying after hits
   bulletin    Build + optionally check AOSP / Pixel security bulletin URLs
@@ -56,7 +57,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 # Defaults
 # ---------------------------------------------------------------------------
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UA = os.environ.get("RESEARCH_UA", "Mozilla/5.0")
 DEFAULT_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "30"))
@@ -70,6 +71,30 @@ MAX_PROBE_ATTEMPTS = 8  # hard stop: do not spray sibling URLs
 DEFAULT_SNIPPET = int(os.environ.get("RESEARCH_SNIPPET", "160"))
 DEFAULT_GREP_MATCHES = 20
 GOOGLESURCE_ROOT = "https://android.googlesource.com/"
+
+# Trees to probe for in-tree driver paths (not repo-name search).
+DEFAULT_KERNEL_TREES: list[tuple[str, list[str]]] = [
+    ("kernel/common", ["HEAD", "android15-6.6", "android14-6.1", "android-mainline"]),
+    ("device/google/shusky-kernels/6.1", ["HEAD"]),
+    ("device/google/shusky-kernels/5.15", ["HEAD"]),
+    ("device/google/shusky-kernel", ["HEAD"]),
+    ("kernel/devices/google/shusky", ["HEAD"]),
+    ("kernel/gs", ["HEAD"]),
+]
+
+# Short subsystem names → likely in-tree paths
+PATH_ALIASES: dict[str, list[str]] = {
+    "dwc3": ["drivers/usb/dwc3", "drivers/usb/dwc3/core.c", "drivers/usb/dwc3/gadget.c"],
+    "xhci": ["drivers/usb/host/xhci-hcd.c", "drivers/usb/host/xhci.c", "drivers/usb/host"],
+    "gadget": ["drivers/usb/gadget", "drivers/usb/gadget/udc"],
+    "typec": ["drivers/usb/typec", "drivers/usb/typec/tcpm"],
+    "usb": ["drivers/usb", "drivers/usb/core", "drivers/usb/host", "drivers/usb/gadget"],
+    "fbe": ["fs/crypto", "fs/f2fs"],
+    "f2fs": ["fs/f2fs"],
+    "ufshcd": ["drivers/ufs", "drivers/ufs/core"],
+    "ufs": ["drivers/ufs", "drivers/scsi/ufs"],
+    "keymint": ["trusty", "drivers/trusty"],
+}
 
 CVE_RE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
 HREF_RE = re.compile(
@@ -924,6 +949,153 @@ def is_googlesource_index(url: str) -> bool:
     return path == "" or path == "/"
 
 
+
+def googlesource_tree_url(repo: str, ref: str, rel_path: str = "") -> str:
+    """Build a Gitiles tree/blob URL for android.googlesource.com."""
+    repo = repo.strip("/")
+    ref = (ref or "HEAD").strip("/")
+    if ref != "HEAD" and not ref.startswith("refs/"):
+        ref = f"refs/heads/{ref}"
+    base = f"https://android.googlesource.com/{repo}/+/{ref}"
+    rel_path = (rel_path or "").strip("/")
+    if not rel_path:
+        return base + "/"
+    # files keep extension; directories get trailing slash for Gitiles
+    if re.search(r"\.[a-zA-Z0-9]{1,8}$", rel_path):
+        return f"{base}/{rel_path}"
+    return f"{base}/{rel_path}/"
+
+
+def expand_path_queries(query: str) -> list[str]:
+    """Map dwc3 / drivers/usb/dwc3 → concrete relative paths to probe."""
+    q = query.strip().strip("/")
+    if not q:
+        return []
+    out: list[str] = []
+    low = q.lower()
+    if low in PATH_ALIASES:
+        out.extend(PATH_ALIASES[low])
+    # also treat query itself as a path
+    if "/" in q or q.endswith((".c", ".h", ".S")):
+        out.insert(0, q)
+    elif low not in PATH_ALIASES:
+        # bare token: try as leaf under common roots later + as path
+        out.append(q)
+        out.append(f"drivers/usb/{q}")
+        out.append(f"drivers/{q}")
+    # unique preserve order
+    seen: set[str] = set()
+    uniq = []
+    for p in out:
+        p2 = p.strip("/")
+        if p2 and p2 not in seen:
+            seen.add(p2)
+            uniq.append(p2)
+    return uniq
+
+
+def parse_gitiles_json(body: bytes) -> dict[str, Any]:
+    """Gitiles JSON is prefixed with )]}' anti-XSSI line."""
+    try:
+        text = body.decode("utf-8", errors="replace").lstrip()
+    except Exception:
+        return {}
+    if text.startswith(")]}'"):
+        text = text[4:].lstrip()
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def list_gitiles_dir(
+    url: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    use_cache: bool = True,
+    max_age: int = 86400,
+) -> dict[str, Any]:
+    """GET ?format=JSON for a tree URL; return names/types."""
+    sep = "&" if "?" in url else "?"
+    jurl = f"{url.rstrip('/')}{sep}format=JSON"
+    r = http_fetch(jurl, timeout=timeout, use_cache=use_cache, max_age=max_age)
+    if not r.get("ok"):
+        return {"ok": False, "http_code": r.get("http_code"), "entries": [], "url": jurl}
+    data = parse_gitiles_json(r["body"])
+    entries = []
+    for e in data.get("entries") or []:
+        if isinstance(e, dict) and e.get("name"):
+            entries.append(
+                {
+                    "name": e.get("name"),
+                    "type": e.get("type"),
+                    "mode": e.get("mode"),
+                }
+            )
+    return {
+        "ok": True,
+        "http_code": r.get("http_code"),
+        "entries": entries,
+        "url": jurl,
+        "id": data.get("id"),
+    }
+
+
+def probe_kernel_paths(
+    query: str,
+    trees: Optional[list[tuple[str, list[str]]]] = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    list_dir: bool = True,
+    max_hits: int = 40,
+) -> dict[str, Any]:
+    """
+    Probe DEFAULT_KERNEL_TREES for paths matching query (e.g. dwc3).
+    Returns hits with http_code and optional directory listing.
+    """
+    paths = expand_path_queries(query)
+    trees = trees or DEFAULT_KERNEL_TREES
+    attempts: list[dict[str, Any]] = []
+    hits: list[dict[str, Any]] = []
+    for repo, refs in trees:
+        for ref in refs:
+            for rel in paths:
+                url = googlesource_tree_url(repo, ref, rel)
+                r = http_check(url, timeout=timeout)
+                entry = {
+                    "repo": repo,
+                    "ref": ref,
+                    "path": rel,
+                    "url": url,
+                    "http_code": r.get("http_code"),
+                    "ok": r.get("ok", False),
+                }
+                attempts.append(entry)
+                if r.get("ok"):
+                    if list_dir and not re.search(r"\.[a-zA-Z0-9]{1,8}$", rel):
+                        listing = list_gitiles_dir(url, timeout=timeout)
+                        if listing.get("ok"):
+                            entry["entries"] = [
+                                e["name"] for e in (listing.get("entries") or [])[:40]
+                            ]
+                            entry["entry_count"] = len(listing.get("entries") or [])
+                    hits.append(entry)
+                    if len(hits) >= max_hits:
+                        return {
+                            "query": query,
+                            "paths": paths,
+                            "hits": hits,
+                            "attempts": attempts,
+                            "truncated": True,
+                        }
+    return {
+        "query": query,
+        "paths": paths,
+        "hits": hits,
+        "attempts": attempts,
+        "truncated": False,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Local search
 # ---------------------------------------------------------------------------
@@ -1362,6 +1534,51 @@ def cmd_grep(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def cmd_paths(args: argparse.Namespace) -> int:
+    """Probe kernel trees for a driver/path (dwc3, drivers/usb/dwc3, …)."""
+    query = args.query
+    trees = DEFAULT_KERNEL_TREES
+    if args.repo:
+        refs = args.ref or ["HEAD"]
+        trees = [(args.repo.strip("/"), refs)]
+    result = probe_kernel_paths(
+        query,
+        trees=trees,
+        timeout=args.timeout,
+        list_dir=not args.no_list,
+        max_hits=args.max_hits,
+    )
+    hits = result["hits"]
+    if args.json:
+        emit(result, as_json=True)
+    else:
+        print(f"# paths: {query!r}  expanded={result['paths']}")
+        print(f"# hits={len(hits)}  attempts={len(result['attempts'])}")
+        if not hits:
+            print("(no path found in default trees)")
+            print("# tried repos: " + ", ".join(t[0] for t in trees))
+            print(
+                f"# tip: {sys.argv[0]} paths drivers/usb/dwc3 "
+                f"--repo kernel/common --ref HEAD"
+            )
+        for h in hits:
+            print(f"[{h['http_code']}] {h['repo']} @ {h['ref']}  {h['path']}")
+            print(f"     {h['url']}")
+            if h.get("entries") is not None:
+                names = h["entries"]
+                print(
+                    f"     entries({h.get('entry_count', len(names))}): "
+                    + ", ".join(names[:25])
+                    + ("…" if len(names) > 25 else "")
+                )
+        if hits:
+            print(
+                f"# next: {sys.argv[0]} grep PATTERN URL  "
+                f"or fetch --raw --out FILE for a blob"
+            )
+    return 0 if hits else 1
+
 def cmd_repos(args: argparse.Namespace) -> int:
     """Search android.googlesource.com repository index by name/description."""
     pattern = args.pattern
@@ -1692,6 +1909,38 @@ def cmd_find(args: argparse.Namespace) -> int:
                 extract_googlesource_repos(rr["body"]), pattern
             )
 
+    # In-tree driver/path probe (dwc3 is not a repo name — repos won't match)
+    path_result: Optional[dict[str, Any]] = None
+    want_paths = (
+        getattr(args, "paths", False)
+        or args.remote
+        or (
+            getattr(args, "repos", False)
+            and pattern.lower() in PATH_ALIASES
+        )
+    )
+    path_like = bool(
+        "/" in pattern
+        or pattern.lower() in PATH_ALIASES
+        or re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{1,40}$", pattern or "")
+    )
+    skip_path_topics = {
+        "husky",
+        "shiba",
+        "pixel8",
+        "pixel 8 pro",
+        "bulletin",
+        "avb",
+        "fastboot",
+    }
+    if want_paths and path_like and topic not in skip_path_topics:
+        path_result = probe_kernel_paths(
+            pattern,
+            timeout=args.timeout,
+            list_dir=True,
+            max_hits=getattr(args, "max_path_hits", 15),
+        )
+
     # Cap local stdout for agents
     local_out = local.get("stdout") or ""
     if compact and local_out:
@@ -1710,10 +1959,11 @@ def cmd_find(args: argparse.Namespace) -> int:
         "remote_candidates": cand_u,
         "remote_results": remote_results,
         "googlesource_repos": repo_hits,
+        "kernel_paths": path_result,
         "advice": (
-            "Use research-tool (not curl). Prefer priority_docs; "
-            "repos for googlesource names; bulletin pixel YYYY-MM for CVEs. "
-            "Never invent CVE IDs."
+            "Use research-tool (not curl). "
+            "repos = repo NAMES only; paths = in-tree drivers (dwc3). "
+            "bulletin pixel YYYY-MM for CVEs. Never invent CVE IDs."
         ),
     }
 
@@ -1744,7 +1994,28 @@ def cmd_find(args: argparse.Namespace) -> int:
             for h in repo_hits[:20]:
                 print(f"  - {h['name']}  {h['url']}")
         elif args.remote or getattr(args, "repos", False):
-            print("## Googlesource repos: (no name match — try: research-tool repos husky)")
+            print(
+                "## Googlesource repos: (no name match — "
+                "names only; for drivers use paths)"
+            )
+        if path_result is not None:
+            hits = path_result.get("hits") or []
+            print(
+                f"## Kernel path probe for {pattern!r}  "
+                f"hits={len(hits)} expanded={path_result.get('paths')}"
+            )
+            if not hits:
+                print("  (no path in default trees)")
+                print(f"  try: {sys.argv[0]} paths {pattern}")
+            for h in hits[:20]:
+                print(f"  [{h['http_code']}] {h['repo']}@{h['ref']}  {h['path']}")
+                print(f"       {h['url']}")
+                if h.get("entries"):
+                    print(
+                        "       files: "
+                        + ", ".join(h["entries"][:20])
+                        + ("…" if len(h["entries"]) > 20 else "")
+                    )
         print(f"# {payload['advice']}")
     return 0
 
@@ -1948,6 +2219,9 @@ Quick recipes (local LLM / agent):
   # 4b. Googlesource repo NAMES (Pixel 8 Pro trees use shusky, not husky alone)
   ./research-tool.py repos husky
   ./research-tool.py repos 'kernel/(gs|common)|shusky'
+  ./research-tool.py paths dwc3
+  ./research-tool.py paths drivers/usb/dwc3 --repo kernel/common
+  ./research-tool.py find dwc3 --remote --paths
   ./research-tool.py grep husky 'https://android.googlesource.com/'   # auto → repos mode
 
   # 5. Extract structure without flooding context
@@ -2085,6 +2359,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_grep)
 
     sp = add_sub(
+        "paths",
+        help="Probe kernel trees for driver/path (dwc3, drivers/usb/dwc3)",
+    )
+    sp.add_argument("query", help="subsystem or path (dwc3, drivers/usb/dwc3)")
+    sp.add_argument("--repo", help="limit to one repo (e.g. kernel/common)")
+    sp.add_argument(
+        "--ref",
+        action="append",
+        help="git ref (repeatable); default HEAD + common android branches",
+    )
+    sp.add_argument("--no-list", action="store_true", help="skip JSON directory listing")
+    sp.add_argument("--max-hits", type=int, default=40)
+    sp.set_defaults(func=cmd_paths)
+
+    sp = add_sub(
         "repos",
         help="Search android.googlesource.com repo names (prefer over grepping /)",
     )
@@ -2175,8 +2464,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--repos",
         action="store_true",
-        help="also search googlesource repo index",
+        help="also search googlesource repo index (names only)",
     )
+    sp.add_argument(
+        "--paths",
+        action="store_true",
+        help="also probe in-tree kernel paths (dwc3, drivers/usb/…)",
+    )
+    sp.add_argument("--max-path-hits", type=int, default=15)
     sp.add_argument(
         "--verbose",
         action="store_true",
