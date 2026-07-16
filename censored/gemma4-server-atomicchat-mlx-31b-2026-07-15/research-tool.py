@@ -38,6 +38,7 @@ Env:
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import html
 import json
@@ -57,7 +58,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 # Defaults
 # ---------------------------------------------------------------------------
 
-VERSION = "1.3.4"
+VERSION = "1.4.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UA = os.environ.get("RESEARCH_UA", "Mozilla/5.0")
 DEFAULT_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "30"))
@@ -1113,6 +1114,89 @@ def googlesource_tree_url(repo: str, ref: str, rel_path: str = "") -> str:
 
 
 
+
+def is_gitiles_tree_url(url: str) -> bool:
+    """Directory/tree URL on googlesource (ends with / or no file extension)."""
+    if "googlesource.com" not in url or "/+/" not in url:
+        return False
+    p = urlparse(url).path
+    if p.endswith("/"):
+        return True
+    # no extension → treat as tree
+    return not bool(re.search(r"/[^/]+\.[a-zA-Z0-9]{1,10}$", p))
+
+
+def gitiles_join(tree_url: str, name: str) -> str:
+    base = tree_url.split("?", 1)[0].rstrip("/") + "/"
+    return base + name.strip("/")
+
+
+def path_glob_match(path: str, patterns: list[str]) -> bool:
+    """fnmatch against basename or full relative path."""
+    if not patterns:
+        return True
+    base = path.rsplit("/", 1)[-1]
+    for pat in patterns:
+        if fnmatch.fnmatch(base, pat) or fnmatch.fnmatch(path, pat):
+            return True
+    return False
+
+
+def walk_gitiles_blobs(
+    tree_url: str,
+    *,
+    includes: list[str] | None = None,
+    excludes: list[str] | None = None,
+    max_depth: int = 2,
+    max_files: int = 40,
+    timeout: int = DEFAULT_TIMEOUT,
+    use_cache: bool = True,
+    max_age: int = 86400,
+) -> list[str]:
+    """
+    Recursively list blob URLs under a Gitiles tree.
+    """
+    includes = includes or []
+    excludes = excludes or []
+    out: list[str] = []
+
+    def walk(url: str, depth: int) -> None:
+        if len(out) >= max_files:
+            return
+        listing = list_gitiles_dir(
+            url, timeout=timeout, use_cache=use_cache, max_age=max_age
+        )
+        if not listing.get("ok"):
+            return
+        for e in listing.get("entries") or []:
+            if len(out) >= max_files:
+                return
+            name = str(e.get("name") or "")
+            if not name:
+                continue
+            et = str(e.get("type") or "")
+            child = gitiles_join(url, name)
+            # relative-ish name for matching
+            rel = name
+            if et == "blob":
+                if excludes and path_glob_match(rel, excludes):
+                    continue
+                if includes and not path_glob_match(rel, includes):
+                    continue
+                out.append(child.rstrip("/"))
+            elif et == "tree" and depth < max_depth:
+                # skip huge/noise dirs by default
+                if name in {".git", "Documentation", "selftests"}:
+                    continue
+                if excludes and path_glob_match(name + "/", excludes):
+                    continue
+                walk(child if child.endswith("/") else child + "/", depth + 1)
+
+    root = tree_url if tree_url.endswith("/") else tree_url + "/"
+    walk(root, 0)
+    return out
+
+
 def is_gitiles_blob_url(url: str) -> bool:
     """True for …/+/REF/path/to/file.c style (not tree ending in /)."""
     if "googlesource.com" not in url or "/+/" not in url:
@@ -1679,6 +1763,113 @@ def cmd_grep(args: argparse.Namespace) -> int:
             url = fixed
         for w in warn_url_hygiene(url):
             print(f"WARN: {w}", file=sys.stderr)
+
+        # Recursive tree grep: expand directory → blob URLs, then process each
+        recursive = getattr(args, "recursive", False)
+        if (
+            recursive
+            and "googlesource.com" in url
+            and "/+/" in url
+            and (
+                is_gitiles_tree_url(url)
+                or url.rstrip("/").endswith("gadget")
+                or not is_gitiles_blob_url(url)
+            )
+        ):
+            includes = list(getattr(args, "include", None) or [])
+            excludes = list(getattr(args, "exclude", None) or [])
+            print(
+                f"# recursive under {url}  include={includes or '*'}  "
+                f"exclude={excludes or []}  max_files={args.max_files}",
+                file=sys.stderr,
+            )
+            blob_urls = walk_gitiles_blobs(
+                url if url.endswith("/") else url + "/",
+                includes=includes,
+                excludes=excludes,
+                max_depth=getattr(args, "max_depth", 2),
+                max_files=getattr(args, "max_files", 40),
+                timeout=args.timeout,
+                use_cache=not args.no_cache,
+                max_age=args.cache_max_age,
+            )
+            if not blob_urls:
+                print(
+                    f"# no blobs matched under tree (check --include / path)",
+                    file=sys.stderr,
+                )
+                if not args.json:
+                    print(f"\n=== {url} ===")
+                    print("FAIL no matching files in tree")
+                continue
+            print(f"# scanning {len(blob_urls)} file(s)", file=sys.stderr)
+            for burl in blob_urls:
+                # inline one-file path by recursive call structure: fall through
+                # via a small inner function would be cleaner — process here
+                br = fetch_gitiles_raw_text(
+                    burl,
+                    timeout=args.timeout,
+                    use_cache=not args.no_cache,
+                    max_age=args.cache_max_age,
+                )
+                if not br.get("ok"):
+                    br = http_fetch(
+                        burl,
+                        timeout=args.timeout,
+                        use_cache=not args.no_cache,
+                        max_age=args.cache_max_age,
+                    )
+                entry_b: dict[str, Any] = {
+                    "url": burl,
+                    "http_code": br.get("http_code"),
+                    "ok": br.get("ok"),
+                    "raw_text": br.get("raw_text", False),
+                    "matches": [],
+                }
+                if not br.get("ok"):
+                    report.append(entry_b)
+                    continue
+                ms = grep_bytes(
+                    br["body"],
+                    pattern,
+                    context=args.context,
+                    max_matches=args.max_matches,
+                    ignore_case=not args.case_sensitive,
+                    plain=False,
+                    snippet_width=snippet_w,
+                    auto_html=False if br.get("raw_text") else True,
+                    fixed_string=getattr(args, "fixed", False),
+                )
+                real = [m for m in ms if not m.get("empty") and "error" not in m]
+                entry_b["matches"] = ms
+                entry_b["match_count"] = len(real)
+                report.append(entry_b)
+                if real:
+                    any_hit = True
+                if not args.json:
+                    note = next((m.get("pattern_note") for m in ms if m.get("pattern_note")), "")
+                    mode = "raw-src" if br.get("raw_text") else "snippet"
+                    if note:
+                        mode += f"+{note}"
+                    print(
+                        f"\n=== {burl}  http={br.get('http_code')}  "
+                        f"matches={len(real)}  mode={mode} ==="
+                    )
+                    if not real:
+                        continue
+                    for m in ms:
+                        if m.get("empty") or "error" in m:
+                            continue
+                        sn = m.get("snippet") or m.get("match") or ""
+                        print(f"L{m['line']}: {sn}")
+            continue
+
+        if is_gitiles_tree_url(url) and not recursive and not is_gitiles_blob_url(url):
+            print(
+                f"# tree URL without -r: listing only. "
+                f"Use: {sys.argv[0]} grep -r --include '*.c' PATTERN '{url}'",
+                file=sys.stderr,
+            )
 
         # Googlesource root is a repo index — prefer repos filter, not HTML dump
         if is_googlesource_index(url) and not getattr(args, "force_html", False):
@@ -2759,6 +2950,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--fixed",
         action="store_true",
         help="fixed-string match (escape regex metacharacters; good for memcpy()",
+    )
+    sp.add_argument(
+        "-r",
+        "-R",
+        "--recursive",
+        action="store_true",
+        help="recurse Gitiles tree URL (list blobs, then grep each)",
+    )
+    sp.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help='only blobs matching glob (repeatable), e.g. --include "*.c"',
+    )
+    sp.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help='skip blobs matching glob (repeatable), e.g. --exclude "config.c"',
+    )
+    sp.add_argument(
+        "--max-files",
+        type=int,
+        default=40,
+        help="max files to open when -r (default 40)",
+    )
+    sp.add_argument(
+        "--max-depth",
+        type=int,
+        default=2,
+        help="max directory depth when -r (default 2)",
     )
     add_cache_flags(sp)
     sp.set_defaults(func=cmd_grep)
