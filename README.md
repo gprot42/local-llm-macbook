@@ -37,8 +37,9 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 ## Quick start
 
 ```bash
-mkdir -p ~/.config/kilo
-cp kilo.json ~/.config/kilo/kilo.jsonc   # once; providers for all stacks
+# Global Kilo (all providers + default model + agent harness) — from monorepo root
+./install_kilo.sh
+# equivalent: mkdir -p ~/.config/kilo && cp kilo.json ~/.config/kilo/kilo.jsonc
 
 # Snappy coding (default recommendation)
 cd censored/qwen3-6-27b-coder-mtplx
@@ -52,7 +53,7 @@ cd censored/qwen3-6-27b-coder-mtplx
 
 Other stacks: `1_*` setup/download → `2_*` start → select the model ID for that folder (table above). Details in each directory’s README.
 
-Root [`kilo.json`](kilo.json) currently defaults to **`openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit`** (aligned stock Gemma text). Install globally with `cp kilo.json ~/.config/kilo/kilo.jsonc`. Switch `"model"` to any ID from the table above, or copy a stack’s local `kilo.json`.
+**Kilo config layers:** monorepo root [`kilo.json`](kilo.json) is the global source of truth (providers + default model + harness prompts). Install it with **`./install_kilo.sh`** → `~/.config/kilo/kilo.jsonc`. Stack folders also have a local `kilo.json` (used when you launch Kilo from that directory). When changing harness rules or the default model for everyone, edit **root** `kilo.json` and re-run `./install_kilo.sh` — not only a stack file. Current default: **`openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit`**.
 
 ---
 

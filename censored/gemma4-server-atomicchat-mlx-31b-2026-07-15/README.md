@@ -83,7 +83,8 @@ The assistant does not replace the target — it only proposes tokens; the 31B m
 | `1_setup_download.sh` | Create venv, install mlx/mlx-lm/mlx-vlm, download AtomicChat target + MTP assistant |
 | `2_start_mlx.sh` | Start server on port 8080 (no MTP by default; pass `--with-mtp` to enable) |
 | `apply_local_patches.sh` | Copy `patches/` into the venv on each start (survives `pip install -U`) |
-| `kilo.json` | Kilo Code config for this project |
+| `kilo.json` | Kilo Code config for this project (model + Gemma temps + harness) |
+| `../../kilo.json` | **Monorepo global** Kilo (all providers + default model) — install with `../../install_kilo.sh` |
 | `patches/sample_utils.py` | top-p fix for 3-D MTP verify logits |
 | `patches/app.py` | Map API model id `default_model` → CLI `--model` (mlx_lm convention) |
 | `patches/models/gemma4/language.py` | MTP rollback when `accepted` is a Python list |
@@ -91,13 +92,32 @@ The assistant does not replace the target — it only proposes tokens; the 31B m
 
 ## Kilo Code
 
-Launch Kilo from **this directory** so `kilo.json` is picked up:
+Launch Kilo from **this directory** so the **project** `kilo.json` is picked up:
 
 ```bash
 cd gemma4-server-atomicchat-mlx-31b-2026-07-15
 ./2_start_mlx.sh    # terminal 1
 kilo                # terminal 2 — same directory
 ```
+
+### Global vs project `kilo.json`
+
+| Config | Path | Role |
+|--------|------|------|
+| **Project** | `./kilo.json` (this folder) | AtomicChat model ID, Gemma agent temps (0.35), answer-then-halt harness |
+| **Monorepo global** | [`../../kilo.json`](../../kilo.json) | All stack providers + default model + shared harness |
+| **Installed global** | `~/.config/kilo/kilo.jsonc` | What Kilo uses when no project file wins |
+
+When you change harness prompts or the default model for **everyone**, update **`../../kilo.json`** (monorepo root) **and** install it:
+
+```bash
+# from this folder:
+../../install_kilo.sh
+# or from monorepo root:
+# ./install_kilo.sh
+```
+
+Keep this folder’s `kilo.json` in sync for Gemma-specific temps/prompts when editing agent rules for AtomicChat sessions.
 
 | Setting | Value | Why |
 |---------|-------|-----|
