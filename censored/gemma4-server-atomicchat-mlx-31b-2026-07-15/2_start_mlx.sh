@@ -51,6 +51,10 @@ VERIFY_MTP=true
 USE_PROXY=true
 PROXY_DEBUG=false
 PROXY_HARNESS_LOG=true
+# Post-start gate: test_harness.py --gate (unit + critical live). Skip with --no-harness-gate.
+HARNESS_GATE=true
+# Also run kilo_lite_loop.py after gate (slower). Off by default; --harness-lite to enable.
+HARNESS_LITE=false
 
 stop_server_on_port() {
     local port="$1"
@@ -90,6 +94,10 @@ for arg in "$@"; do
         echo "  --no-proxy           Raw mlx on public port (no compaction tool-strip)"
         echo "  --debug              Proxy DEBUG logging (still no full message bodies)"
         echo "  --no-harness-log     Disable one-line [harness] req/resp traces (default: on)"
+        echo "  --harness-gate       Run test_harness.py --gate after start (default: on with proxy)"
+        echo "  --no-harness-gate    Skip post-start harness gate"
+        echo "  --harness-lite       Also run kilo_lite_loop.py (multi-step loop shape; slower)"
+        echo "  --no-harness-lite    Skip kilo_lite_loop (default)"
         echo "  --port PORT          Public API port (default: 8080)"
         echo "  --engine-port PORT   Upstream mlx port when proxy on (default: 8090)"
         echo "  --host HOST          Host to bind (default: 127.0.0.1)"
@@ -115,9 +123,13 @@ while [[ $i -lt ${#args[@]} ]]; do
         --no-mtp) ENABLE_MTP=false; ((i+=1)) ;;
         --with-mtp|--mtp) ENABLE_MTP=true; ((i+=1)) ;;
         --proxy) USE_PROXY=true; ((i+=1)) ;;
-        --no-proxy) USE_PROXY=false; ((i+=1)) ;;
+        --no-proxy) USE_PROXY=false; HARNESS_GATE=false; ((i+=1)) ;;
         --debug) PROXY_DEBUG=true; ((i+=1)) ;;
         --no-harness-log) PROXY_HARNESS_LOG=false; ((i+=1)) ;;
+        --harness-gate) HARNESS_GATE=true; ((i+=1)) ;;
+        --no-harness-gate) HARNESS_GATE=false; ((i+=1)) ;;
+        --harness-lite) HARNESS_LITE=true; ((i+=1)) ;;
+        --no-harness-lite) HARNESS_LITE=false; ((i+=1)) ;;
         --port) PORT="${args[$((i+1))]:-$PORT}"; ((i+=2)) ;;
         --engine-port) ENGINE_PORT="${args[$((i+1))]:-$ENGINE_PORT}"; ((i+=2)) ;;
         --host) HOST="${args[$((i+1))]:-$HOST}"; ((i+=2)) ;;
@@ -389,6 +401,34 @@ if [ "$USE_PROXY" = true ]; then
         echo "ERROR: proxy is up but /v1/models failed (engine unreachable?)."
         exit 1
     fi
+
+    # Post-start harness gate (before trusting Kilo). Not a full Kilo emulator.
+    if [ "$HARNESS_GATE" = true ]; then
+        echo ""
+        echo "→ Harness gate: python3 test_harness.py --gate ..."
+        if ! python3 "$SCRIPT_DIR/test_harness.py" --gate --base "http://${HOST}:${PORT}"; then
+            echo "ERROR: harness gate failed. Fix proxy/config before using Kilo."
+            echo "       Skip with: ./2_start_mlx.sh --no-harness-gate"
+            echo "       Full suite: python3 test_harness.py"
+            kill -TERM "$PROXY_PID" 2>/dev/null || true
+            kill -TERM "$SERVER_PID" 2>/dev/null || true
+            exit 1
+        fi
+        echo "→ Harness gate passed"
+    fi
+
+    if [ "$HARNESS_LITE" = true ]; then
+        echo ""
+        echo "→ Kilo-lite loop: python3 kilo_lite_loop.py ..."
+        if ! python3 "$SCRIPT_DIR/kilo_lite_loop.py" --base "http://${HOST}:${PORT}"; then
+            echo "ERROR: kilo_lite_loop failed (multi-step loop shape)."
+            echo "       Skip with: omit --harness-lite (default off)"
+            kill -TERM "$PROXY_PID" 2>/dev/null || true
+            kill -TERM "$SERVER_PID" 2>/dev/null || true
+            exit 1
+        fi
+        echo "→ Kilo-lite loop passed"
+    fi
 fi
 
 # ── MTP smoke / verify (rollback, wedged BatchGenerator, visible confirmation) ─
@@ -427,6 +467,8 @@ fi
 if [ "$USE_PROXY" = true ]; then
     echo "  Harness:    gemma4_kilo_proxy (thinking OFF + compaction tool-strip)"
     echo "  Path:       :$PORT proxy → :$BIND_PORT engine"
+    echo "  Gate:       $([ "$HARNESS_GATE" = true ] && echo "test_harness.py --gate (on)" || echo "skipped")"
+    echo "  Lite loop:  $([ "$HARNESS_LITE" = true ] && echo "kilo_lite_loop.py (on)" || echo "off — not full Kilo emul.")"
 else
     echo "  Harness:    none (raw engine — compaction may fail in long Kilo sessions)"
 fi
@@ -440,6 +482,10 @@ echo "  curl test:"
 echo "    curl http://localhost:$PORT/v1/models"
 if [ "$USE_PROXY" = true ]; then
     echo "    curl http://localhost:$PORT/healthz"
+    echo "  tests (outside Kilo — no full emulator):"
+    echo "    python3 test_harness.py --gate"
+    echo "    python3 test_harness.py"
+    echo "    python3 kilo_lite_loop.py"
 fi
 if [ "$ENABLE_MTP" = true ]; then
     echo "  MTP verify (anytime):"

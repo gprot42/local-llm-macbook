@@ -81,8 +81,10 @@ The assistant does not replace the target — it only proposes tokens; the 31B m
 | File | Purpose |
 |---|---|
 | `1_setup_download.sh` | Create venv, install mlx/mlx-lm/mlx-vlm, download AtomicChat target + MTP assistant |
-| `2_start_mlx.sh` | Start Kilo proxy on `:8080` → MLX engine on `:8090` (no MTP by default; pass `--with-mtp` / `--no-proxy`) |
-| `gemma4_kilo_proxy.py` | Harness proxy: strip tools on compaction, truncate large tool results |
+| `2_start_mlx.sh` | Start Kilo proxy on `:8080` → MLX engine on `:8090`; runs `test_harness.py --gate` by default |
+| `gemma4_kilo_proxy.py` | Harness proxy: thinking off, compaction tool-strip, empty-tool recovery |
+| `test_harness.py` | Outside-Kilo contract tests + `--gate` post-start check (not a Kilo emulator) |
+| `kilo_lite_loop.py` | Multi-step tool-loop shape tests only (not full Kilo) |
 | `apply_local_patches.sh` | Copy `patches/` into the venv on each start (survives `pip install -U`) |
 | `kilo.json` | Kilo Code config for this project (model + Gemma temps + harness) |
 | `../../kilo.json` | **Monorepo global** Kilo (all providers + default model) — install with `../../install_kilo.sh` |
@@ -155,19 +157,28 @@ Cause: auto-compaction still sent `tools`, so Gemma kept exploring instead of wr
 ./2_start_mlx.sh --debug         # proxy DEBUG + harness traces
 ./2_start_mlx.sh --no-harness-log
 curl -s http://127.0.0.1:8080/healthz
-# Standalone harness tests (outside Kilo — ~77 unit+live+fringe checks):
-python3 test_harness.py
-python3 test_harness.py --strict      # also fail soft model-behavior checks
-python3 test_harness.py --unit-only   # pure proxy helpers, no server
-python3 test_harness.py --quick       # skip multi-turn / concurrent live tests
-python3 test_harness.py --live-only
-python3 test_harness.py --fringe-only # edge-case pack only
+# Standalone harness tests (outside Kilo — contract gate, not a full Kilo emulator):
+python3 test_harness.py --gate       # post-start gate (also run by ./2_start_mlx.sh by default)
+python3 test_harness.py              # full unit+live+fringe
+python3 test_harness.py --strict
+python3 test_harness.py --unit-only
+python3 test_harness.py --quick
+python3 test_harness.py --fringe-only
+# Multi-step *loop shape* only (still not full Kilo — no session/compaction UI):
+python3 kilo_lite_loop.py
+python3 kilo_lite_loop.py --strict
+# Start options:
+./2_start_mlx.sh --no-harness-gate   # skip gate
+./2_start_mlx.sh --harness-lite      # also run kilo_lite_loop after gate
 # tail harness traces (no message bodies):
-#   [harness] req compaction=False tools_in=12 tool_choice_in=auto ...
-#   [harness] resp stream finish='tool_calls' tool_calls=[bash,read] ...
-#   empty_tool_recovery=True  → last tool was empty; proxy forced local-tool recovery nudge
-tail -f /tmp/gemma4_kilo_proxy.log   # if started via nohup; else terminal stdout
+tail -f /tmp/gemma4_kilo_proxy.log
 ```
+
+| Tool | Emulates Kilo? | Purpose |
+|------|----------------|---------|
+| `test_harness.py` | **No** | Proxy + wire contract regressions |
+| `kilo_lite_loop.py` | **Loop shape only** | Multi-step tool rounds + empty-tool recovery |
+| Full Kilo TUI/session | Real product | Permissions, compaction UI, prune — not reimplemented |
 
 **Empty tool recovery:** if the latest tool result is empty, the proxy injects a system nudge: do not write a revised plan — next action must be a local `ls`/`glob`/`grep`/`read`.
 

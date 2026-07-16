@@ -11,6 +11,10 @@ Usage:
   python3 test_harness.py --live-only
   python3 test_harness.py --quick       # skip slower multi-turn live tests
   python3 test_harness.py --fringe-only # fringe edge cases only
+  python3 test_harness.py --gate        # post-start gate (unit + critical live only)
+
+We do NOT fully emulate Kilo (no session DB, compaction UI, permissions).
+For multi-step *loop shape* tests see kilo_lite_loop.py.
 
 Exit codes:
   0  all required checks passed
@@ -1605,6 +1609,143 @@ def run_live_tests(
 # ---------------------------------------------------------------------------
 
 
+def run_gate_tests(base: str, report: Report) -> bool:
+    """Fast post-start gate: all unit/fringe-unit + critical live only.
+
+    Intended to run after gemma4_kilo_proxy is up, before trusting Kilo.
+    Skips multi-turn, concurrent, and most fringe live (keeps thinking-off force).
+    """
+    print("\n== Gate mode (post-start) ==")
+    run_unit_tests(report)
+    run_fringe_unit_tests(report)
+
+    print(f"\n== Gate live ({base}) ==")
+    try:
+        code, data, elapsed = _http_json(base, "GET", "/healthz", timeout=5)
+        ok = code == 200 and isinstance(data, dict) and data.get("ok") is True
+        report.check(
+            "gate: GET /healthz",
+            ok,
+            f"status={code} body={data!r} {elapsed:.2f}s",
+        )
+        if not ok:
+            return False
+    except Exception as e:
+        report.check("gate: GET /healthz", False, str(e))
+        return False
+
+    # Critical live regressions only
+    try:
+        code, data, elapsed = _chat(
+            base,
+            [{"role": "user", "content": "Reply with exactly the word PONG."}],
+            max_tokens=16,
+            tools=None,
+        )
+        msg = _msg(data) if isinstance(data, dict) else {}
+        content = _content(msg).strip()
+        report.check(
+            "gate: thinking off → content",
+            code == 200 and "PONG" in content.upper(),
+            f"content={content[:40]!r} {elapsed:.2f}s",
+        )
+    except Exception as e:
+        report.check("gate: thinking off → content", False, str(e))
+
+    try:
+        code, data, elapsed = _chat(
+            base,
+            [
+                {"role": "system", "content": SUMMARIZE_BAIT_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        "Using tools only, run bash with command exactly: echo gate_ok."
+                    ),
+                },
+            ],
+            tools=TOOLS,
+            tool_choice="auto",
+            max_tokens=96,
+        )
+        msg = _msg(data) if isinstance(data, dict) else {}
+        names = _tool_names(msg)
+        finish = _finish(data) if isinstance(data, dict) else None
+        hard_ok = code == 200
+        soft_ok = hard_ok and (finish == "tool_calls" or "bash" in names)
+        report.check(
+            "gate: tools not stripped → tool_calls",
+            soft_ok,
+            f"finish={finish!r} tools={names} {elapsed:.2f}s",
+            soft=hard_ok and not soft_ok,
+        )
+    except Exception as e:
+        report.check("gate: tools not stripped → tool_calls", False, str(e))
+
+    try:
+        code, data, elapsed = _chat(
+            base,
+            [
+                {"role": "system", "content": "You are a coding agent."},
+                {"role": "user", "content": "Find files with tools."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "g1",
+                            "type": "function",
+                            "function": {
+                                "name": "bash",
+                                "arguments": '{"command":"curl -s https://x/ | grep z"}',
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "g1", "content": "(no output)"},
+            ],
+            tools=TOOLS,
+            tool_choice="auto",
+            max_tokens=96,
+        )
+        msg = _msg(data) if isinstance(data, dict) else {}
+        names = _tool_names(msg)
+        finish = _finish(data) if isinstance(data, dict) else None
+        hard_ok = code == 200
+        soft_ok = hard_ok and (finish == "tool_calls" or bool(names))
+        report.check(
+            "gate: empty tool → continues with tools",
+            soft_ok,
+            f"finish={finish!r} tools={names} {elapsed:.2f}s",
+            soft=hard_ok and not soft_ok,
+        )
+    except Exception as e:
+        report.check("gate: empty tool → continues with tools", False, str(e))
+
+    try:
+        code, data, elapsed = _chat(
+            base,
+            [{"role": "user", "content": "Reply with exactly the word ZAP."}],
+            max_tokens=16,
+            tools=None,
+            extra={
+                "enable_thinking": True,
+                "chat_template_kwargs": {"enable_thinking": True},
+            },
+        )
+        msg = _msg(data) if isinstance(data, dict) else {}
+        content = _content(msg).strip()
+        report.check(
+            "gate: client enable_thinking forced off",
+            code == 200 and bool(content),
+            f"content={content[:40]!r} {elapsed:.2f}s",
+        )
+    except Exception as e:
+        report.check("gate: client enable_thinking forced off", False, str(e))
+
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="AtomicChat Kilo harness smoke tests")
     ap.add_argument("--base", default=DEFAULT_BASE, help="Public API base (proxy)")
@@ -1614,6 +1755,11 @@ def main(argv: list[str] | None = None) -> int:
         "--fringe-only",
         action="store_true",
         help="Only fringe unit + fringe live tests",
+    )
+    ap.add_argument(
+        "--gate",
+        action="store_true",
+        help="Post-start gate: unit+fringe-unit + critical live only",
     )
     ap.add_argument(
         "--quick",
@@ -1631,13 +1777,16 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"  base={args.base}  strict={args.strict}  "
         f"unit_only={args.unit_only} live_only={args.live_only} "
-        f"fringe_only={args.fringe_only} quick={args.quick}"
+        f"fringe_only={args.fringe_only} gate={args.gate} quick={args.quick}"
     )
+    print("  Note: this is NOT a full Kilo emulator (see kilo_lite_loop.py for loop shape).")
 
     report = Report()
     connected = True
 
-    if args.fringe_only:
+    if args.gate:
+        connected = run_gate_tests(args.base, report)
+    elif args.fringe_only:
         run_fringe_unit_tests(report)
         if not args.unit_only:
             try:
