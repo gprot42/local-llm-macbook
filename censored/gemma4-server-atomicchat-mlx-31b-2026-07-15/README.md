@@ -83,6 +83,7 @@ The assistant does not replace the target — it only proposes tokens; the 31B m
 | `1_setup_download.sh` | Create venv, install mlx/mlx-lm/mlx-vlm, download AtomicChat target + MTP assistant |
 | `2_start_mlx.sh` | Start Kilo proxy on `:8080` → MLX engine on `:8090`; runs `test_harness.py --gate` by default |
 | `gemma4_kilo_proxy.py` | Harness proxy: thinking off, compaction tool-strip, empty-tool recovery |
+| `research-tool.py` | Agent doc research (check/grep/repos) — prefer over raw curl |
 | `test_harness.py` | Outside-Kilo contract tests + `--gate` post-start check (not a Kilo emulator) |
 | `kilo_lite_loop.py` | Multi-step tool-loop shape tests only (not full Kilo) |
 | `apply_local_patches.sh` | Copy `patches/` into the venv on each start (survives `pip install -U`) |

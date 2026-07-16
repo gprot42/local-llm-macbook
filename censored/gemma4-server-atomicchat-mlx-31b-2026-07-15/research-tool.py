@@ -9,7 +9,8 @@ Commands (see --help and `research-tool.py help`):
 
   check       HTTP status + final URL (one or many)
   fetch       Download body (capped / cached / optional save)
-  grep        Fetch URL(s) and search a pattern with context
+  grep        Fetch URL(s) and search; agent-friendly snippets (not raw HTML)
+  repos       Search android.googlesource.com repo index by name (use instead of grepping /)
   resolve     Suggest corrected URL variants (no network, or --probe)
   probe       Try variants until one returns 200; stop spraying after hits
   bulletin    Build + optionally check AOSP / Pixel security bulletin URLs
@@ -17,12 +18,14 @@ Commands (see --help and `research-tool.py help`):
   cves        Extract CVE-YYYY-NNNNN IDs from a page (never invent)
   title       HTTP meta: status, final URL, content-type, rough title
   local       Search project files first (rg; context-cheap)
-  find        Local search + optional remote candidate URLs for a topic
+  find        Compact local + optional remote (+ optional googlesource repos)
   known       Print curated known-good URLs for this project
   cache       list | clear | path — on-disk fetch cache
   multi       Batch: check several URLs → compact table
   text        Fetch and strip HTML → plain text (capped)
   suggest     Given a bad URL or topic keyword, suggest where to look
+
+Prefer this tool over raw curl for all HTTP research.
 
 Env:
   RESEARCH_UA          User-Agent (default: Mozilla/5.0)
@@ -53,7 +56,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 # Defaults
 # ---------------------------------------------------------------------------
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UA = os.environ.get("RESEARCH_UA", "Mozilla/5.0")
 DEFAULT_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "30"))
@@ -64,6 +67,9 @@ CACHE_DIR = Path(
 PROJECT_ROOT = Path(os.environ.get("RESEARCH_PROJECT", str(SCRIPT_DIR)))
 MAX_REDIRS = 10
 MAX_PROBE_ATTEMPTS = 8  # hard stop: do not spray sibling URLs
+DEFAULT_SNIPPET = int(os.environ.get("RESEARCH_SNIPPET", "160"))
+DEFAULT_GREP_MATCHES = 20
+GOOGLESURCE_ROOT = "https://android.googlesource.com/"
 
 CVE_RE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
 HREF_RE = re.compile(
@@ -169,6 +175,9 @@ TOPIC_CANDIDATES: dict[str, list[str]] = {
         "https://grapheneos.org/releases",
         "https://developers.google.com/android/images",
         "https://grapheneos.org/install/cli",
+        "https://android.googlesource.com/device/google/gs-common/",
+        "https://android.googlesource.com/kernel/gs/",
+        "https://android.googlesource.com/kernel/common/",
     ],
     "pixel8": [
         "https://source.android.com/docs/setup/reference/build-numbers",
@@ -661,21 +670,71 @@ def extract_cves(body: bytes) -> list[str]:
     return out
 
 
+def looks_like_html(body: bytes) -> bool:
+    head = body[:800].lower()
+    return b"<!doctype html" in head or b"<html" in head or b"<head" in head
+
+
+def soft_break_minified(text: str) -> str:
+    """Turn minified HTML into greppable lines without full strip."""
+    if text.count("\n") >= 20:
+        return text
+    # break after tags / between repo list items
+    text = re.sub(r">\s*<", ">\n<", text)
+    text = re.sub(r"</a>", "</a>\n", text)
+    return text
+
+
+def snippet_around(
+    line: str, cre: re.Pattern[str], width: int = DEFAULT_SNIPPET
+) -> list[str]:
+    out: list[str] = []
+    for m in cre.finditer(line):
+        half = max(24, width // 2)
+        start = max(0, m.start() - half)
+        end = min(len(line), m.end() + half)
+        snip = line[start:end]
+        # collapse whitespace for readability
+        snip = re.sub(r"\s+", " ", snip).strip()
+        if start > 0:
+            snip = "…" + snip
+        if end < len(line):
+            snip = snip + "…"
+        if snip not in out:
+            out.append(snip)
+        if len(out) >= 8:
+            break
+    return out
+
+
 def grep_bytes(
     body: bytes,
     pattern: str,
     context: int = 2,
-    max_matches: int = 30,
+    max_matches: int = DEFAULT_GREP_MATCHES,
     ignore_case: bool = True,
     plain: bool = False,
+    snippet_width: int = DEFAULT_SNIPPET,
+    auto_html: bool = True,
 ) -> list[dict[str, Any]]:
-    """Line-oriented grep with context. Optionally strip HTML first."""
+    """
+    Grep body for pattern. Agent-friendly defaults:
+    - HTML auto-detected → strip tags (plain) + soft-break minified pages
+    - Long lines → short snippets around the match (not 50KB lines)
+    """
     try:
         text = body.decode("utf-8", errors="replace")
     except Exception:
         return []
-    if plain:
+
+    htmlish = looks_like_html(body)
+    if plain or (auto_html and htmlish):
+        # keep structure-ish breaks then strip tags
+        text = soft_break_minified(text)
         text = strip_html(text)
+    elif htmlish:
+        text = soft_break_minified(text)
+
     flags = re.IGNORECASE if ignore_case else 0
     try:
         cre = re.compile(pattern, flags)
@@ -683,24 +742,135 @@ def grep_bytes(
         return [{"error": f"bad regex: {e}"}]
 
     lines = text.splitlines()
-    matches: list[dict[str, Any]] = []
+    # If still a tiny number of huge lines, force character-window search
+    if len(lines) <= 3 and any(len(L) > 2000 for L in lines):
+        blob = "\n".join(lines)
+        matches: list[dict[str, Any]] = []
+        for sn in snippet_around(blob, cre, snippet_width):
+            matches.append(
+                {
+                    "line": 1,
+                    "match": sn,
+                    "snippet": sn,
+                    "context": [{"line": 1, "text": sn}],
+                }
+            )
+            if len(matches) >= max_matches:
+                break
+        return matches
+
+    matches = []
     for i, line in enumerate(lines):
-        if cre.search(line):
+        if not cre.search(line):
+            continue
+        if len(line) > snippet_width * 2:
+            snips = snippet_around(line, cre, snippet_width)
+            for sn in snips:
+                matches.append(
+                    {
+                        "line": i + 1,
+                        "match": sn,
+                        "snippet": sn,
+                        "context": [{"line": i + 1, "text": sn}],
+                    }
+                )
+                if len(matches) >= max_matches:
+                    return matches
+        else:
             start = max(0, i - context)
             end = min(len(lines), i + context + 1)
+            ctx = []
+            for j in range(start, end):
+                t = lines[j]
+                if len(t) > snippet_width * 2:
+                    t = t[: snippet_width] + "…"
+                ctx.append({"line": j + 1, "text": t})
             matches.append(
                 {
                     "line": i + 1,
-                    "match": line[:500],
-                    "context": [
-                        {"line": j + 1, "text": lines[j][:500]}
-                        for j in range(start, end)
-                    ],
+                    "match": line[:snippet_width],
+                    "snippet": line[:snippet_width],
+                    "context": ctx,
                 }
             )
             if len(matches) >= max_matches:
                 break
     return matches
+
+
+REPO_ITEM_RE = re.compile(
+    r'class="RepoList-item"\s+href="([^"]+)"[^>]*>\s*'
+    r'<span class="RepoList-itemName">([^<]*)</span>\s*'
+    r'(?:<span class="RepoList-itemDescription">([^<]*)</span>)?',
+    re.IGNORECASE,
+)
+
+
+def extract_googlesource_repos(
+    body: bytes, base_url: str = GOOGLESURCE_ROOT
+) -> list[dict[str, str]]:
+    """Parse android.googlesource.com repo list page into name/url/description."""
+    try:
+        text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for m in REPO_ITEM_RE.finditer(text):
+        href, name, desc = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
+        name = html.unescape(name)
+        desc = html.unescape(desc)
+        url = urljoin(base_url, href)
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append({"name": name, "url": url, "description": desc})
+    # Fallback: any path-like href under root that looks like a repo
+    if not out:
+        for href in HREF_RE.findall(text):
+            if not href.startswith("/") or href.startswith("/+/") or href.startswith("/#"):
+                continue
+            # /kernel/common/ style
+            if href.count("/") < 2:
+                continue
+            name = href.strip("/")
+            if not name or name in seen:
+                continue
+            if any(x in name for x in ("static", "accounts", "+")):
+                continue
+            seen.add(name)
+            out.append(
+                {
+                    "name": name,
+                    "url": urljoin(base_url, href if href.endswith("/") else href + "/"),
+                    "description": "",
+                }
+            )
+    return out
+
+
+def filter_repos(
+    repos: list[dict[str, str]], pattern: str, ignore_case: bool = True
+) -> list[dict[str, str]]:
+    flags = re.IGNORECASE if ignore_case else 0
+    try:
+        cre = re.compile(pattern, flags)
+    except re.error:
+        cre = re.compile(re.escape(pattern), flags)
+    hits = []
+    for r in repos:
+        blob = f"{r.get('name','')} {r.get('description','')} {r.get('url','')}"
+        if cre.search(blob):
+            hits.append(r)
+    return hits
+
+
+def is_googlesource_index(url: str) -> bool:
+    p = urlparse(url)
+    if "googlesource.com" not in p.netloc:
+        return False
+    path = (p.path or "/").rstrip("/")
+    return path == "" or path == "/"
 
 
 # ---------------------------------------------------------------------------
@@ -951,17 +1121,76 @@ def cmd_grep(args: argparse.Namespace) -> int:
     urls = args.urls
     any_hit = False
     report: list[dict[str, Any]] = []
+    snippet_w = getattr(args, "snippet", DEFAULT_SNIPPET)
+    # default agent mode: plain HTML + snippets (disable with --raw-lines)
+    use_plain = args.plain or not getattr(args, "raw_lines", False)
+    raw_lines = getattr(args, "raw_lines", False)
+    if raw_lines:
+        use_plain = args.plain
 
     for url in urls:
         for w in warn_url_hygiene(url):
             print(f"WARN: {w}", file=sys.stderr)
+
+        # Googlesource root is a repo index — prefer repos filter, not HTML dump
+        if is_googlesource_index(url) and not getattr(args, "force_html", False):
+            r = http_fetch(
+                url if url.endswith("/") else url + "/",
+                timeout=args.timeout,
+                use_cache=not args.no_cache,
+                max_age=args.cache_max_age,
+            )
+            entry: dict[str, Any] = {
+                "url": url,
+                "http_code": r.get("http_code"),
+                "url_effective": r.get("url_effective"),
+                "ok": r.get("ok"),
+                "mode": "googlesource_repos",
+                "repos": [],
+                "matches": [],
+            }
+            if not r.get("ok"):
+                entry["error"] = r.get("error") or f"HTTP {r.get('http_code')}"
+                report.append(entry)
+                if not args.json:
+                    print(f"\n=== {url} ===")
+                    print(f"FAIL http_code={r.get('http_code')}")
+                continue
+            repos = extract_googlesource_repos(r["body"], r.get("url_effective") or url)
+            hits = filter_repos(repos, pattern, ignore_case=not args.case_sensitive)
+            entry["repos"] = hits
+            entry["repo_total"] = len(repos)
+            entry["match_count"] = len(hits)
+            if hits:
+                any_hit = True
+            report.append(entry)
+            if not args.json:
+                print(
+                    f"\n=== googlesource repos matching {pattern!r}  "
+                    f"http={r.get('http_code')}  hits={len(hits)}/{len(repos)} ==="
+                )
+                print(
+                    f"# Tip: root index is not a code search. "
+                    f"Use: {sys.argv[0]} repos '{pattern}'"
+                )
+                if not hits:
+                    print("(no repo name/description matches)")
+                    # still show a few high-signal related guesses
+                    print("# try: kernel/gs, kernel/common, device/google/*")
+                for h in hits[: args.max_matches]:
+                    print(f"  {h['name']}")
+                    print(f"    {h['url']}")
+                    if h.get("description"):
+                        print(f"    {h['description'][:120]}")
+            continue
+
         r = http_fetch(
             url,
             timeout=args.timeout,
             use_cache=not args.no_cache,
             max_age=args.cache_max_age,
         )
-        entry: dict[str, Any] = {
+        entry = {
             "url": url,
             "http_code": r.get("http_code"),
             "url_effective": r.get("url_effective"),
@@ -975,6 +1204,12 @@ def cmd_grep(args: argparse.Namespace) -> int:
             if not args.json:
                 print(f"\n=== {url} ===")
                 print(f"FAIL http_code={r.get('http_code')}")
+                if is_googlesource_index(url) or "googlesource.com" in url:
+                    print(
+                        f"# hint: {sys.argv[0]} repos '{pattern}'  "
+                        f"or probe URL variants",
+                        file=sys.stderr,
+                    )
             continue
 
         matches = grep_bytes(
@@ -983,7 +1218,9 @@ def cmd_grep(args: argparse.Namespace) -> int:
             context=args.context,
             max_matches=args.max_matches,
             ignore_case=not args.case_sensitive,
-            plain=args.plain,
+            plain=use_plain and not raw_lines,
+            snippet_width=snippet_w,
+            auto_html=not raw_lines,
         )
         entry["matches"] = matches
         entry["match_count"] = len(matches)
@@ -992,34 +1229,106 @@ def cmd_grep(args: argparse.Namespace) -> int:
         report.append(entry)
 
         if not args.json:
-            print(f"\n=== {url}  http={r.get('http_code')}  matches={len(matches)} ===")
+            print(
+                f"\n=== {url}  http={r.get('http_code')}  "
+                f"matches={len(matches)}  mode={'raw' if raw_lines else 'snippet'} ==="
+            )
             if not matches:
                 print("(no matches)")
             for m in matches:
                 if "error" in m:
                     print(f"ERROR: {m['error']}")
                     continue
-                print(f"--- line {m['line']} ---")
-                for c in m["context"]:
-                    mark = ">" if c["line"] == m["line"] else " "
-                    print(f"{mark}{c['line']}: {c['text']}")
+                sn = m.get("snippet") or m.get("match") or ""
+                print(f"L{m['line']}: {sn}")
+                # only show multi-line context when short and useful
+                if (
+                    not raw_lines
+                    and len(m.get("context") or []) > 1
+                    and all(len(c.get("text", "")) < 120 for c in m["context"])
+                ):
+                    for c in m["context"]:
+                        mark = ">" if c["line"] == m["line"] else " "
+                        print(f"  {mark}{c['line']}: {c['text']}")
 
     if args.json:
         emit({"pattern": pattern, "results": report}, as_json=True)
 
     if not any_hit:
-        # helpful next steps
         if not args.json:
             print(
-                "\n# No remote matches. Try:\n"
+                "\n# No matches. Prefer:\n"
+                f"#   {sys.argv[0]} repos '{pattern}'     # googlesource repo names\n"
                 f"#   {sys.argv[0]} local '{pattern}'\n"
-                f"#   {sys.argv[0]} find '{pattern}'\n"
+                f"#   {sys.argv[0]} find '{pattern}' --remote --compact\n"
                 f"#   {sys.argv[0]} suggest '{pattern}'\n"
-                "# Or fix URL: resolve / probe",
+                "# Do not raw-curl DevSite / dump HTML into context.",
                 file=sys.stderr,
             )
         return 1
     return 0
+
+
+def cmd_repos(args: argparse.Namespace) -> int:
+    """Search android.googlesource.com repository index by name/description."""
+    pattern = args.pattern
+    base = args.base.rstrip("/") + "/"
+    r = http_fetch(
+        base,
+        timeout=args.timeout,
+        use_cache=not args.no_cache,
+        max_age=args.cache_max_age,
+    )
+    if not r.get("ok"):
+        print(f"ERROR: http_code={r.get('http_code')} url={base}", file=sys.stderr)
+        return 1
+    repos = extract_googlesource_repos(r["body"], base)
+    hits = filter_repos(repos, pattern, ignore_case=not args.case_sensitive)
+    # optional live check first N
+    if args.check:
+        for h in hits[: args.check_max]:
+            cr = http_check(h["url"], timeout=args.timeout)
+            h["http_code"] = cr.get("http_code")
+            h["ok"] = cr.get("ok")
+
+    if args.json:
+        emit(
+            {
+                "base": base,
+                "pattern": pattern,
+                "repo_total": len(repos),
+                "hits": hits,
+                "count": len(hits),
+            },
+            as_json=True,
+        )
+    else:
+        print(
+            f"# googlesource repos matching {pattern!r}: "
+            f"{len(hits)} / {len(repos)} indexed"
+        )
+        if not hits:
+            print("(none)")
+            # helpful pixel kernel guesses
+            print("# related probes (not necessarily matching pattern):")
+            for guess in (
+                "kernel/gs",
+                "kernel/common",
+                "kernel/google-modules",
+                "device/google/gs-common",
+                "device/google/tangorpro",
+            ):
+                print(f"  https://android.googlesource.com/{guess}/")
+        for h in hits[: args.max]:
+            code = h.get("http_code")
+            prefix = f"[{code}] " if code else ""
+            print(f"{prefix}{h['name']}")
+            print(f"  {h['url']}")
+            if h.get("description"):
+                print(f"  {h['description'][:160]}")
+        if len(hits) > args.max:
+            print(f"# … {len(hits) - args.max} more (raise --max)")
+    return 0 if hits else 1
 
 
 def cmd_resolve(args: argparse.Namespace) -> int:
@@ -1224,23 +1533,23 @@ def cmd_local(args: argparse.Namespace) -> int:
 
 
 def cmd_find(args: argparse.Namespace) -> int:
-    """Local-first discovery, then optional remote candidates."""
+    """Local-first discovery, then optional remote candidates (compact by default)."""
     topic = args.topic.strip().lower()
     pattern = args.pattern or args.topic
+    compact = not getattr(args, "verbose", False)
+    max_local = min(args.max_matches, 12 if compact else args.max_matches)
     pri = local_priority_hint(pattern)
     local = local_search(
         pattern,
-        max_matches=args.max_matches,
-        context=args.context,
+        max_matches=max_local,
+        context=0 if compact else args.context,
     )
 
     candidates = list(TOPIC_CANDIDATES.get(topic, []))
-    # also fuzzy: if topic is a key substring
     if not candidates:
         for k, urls in TOPIC_CANDIDATES.items():
             if topic in k or k in topic:
                 candidates.extend(urls)
-    # de-dupe candidates
     seen: set[str] = set()
     cand_u: list[str] = []
     for u in candidates:
@@ -1266,53 +1575,84 @@ def cmd_find(args: argparse.Namespace) -> int:
                 matches = grep_bytes(
                     r["body"],
                     pattern,
-                    context=1,
-                    max_matches=5,
+                    context=0,
+                    max_matches=3,
                     plain=True,
+                    snippet_width=120,
                 )
                 entry["match_count"] = len(matches)
                 entry["matches"] = matches
             remote_results.append(entry)
 
+    repo_hits: list[dict[str, str]] = []
+    if getattr(args, "repos", False) or (
+        args.remote and topic in {"husky", "shiba", "pixel8", "pixel 8 pro", "kernel"}
+    ):
+        rr = http_fetch(
+            GOOGLESURCE_ROOT,
+            timeout=args.timeout,
+            use_cache=not args.no_cache,
+            max_age=args.cache_max_age,
+        )
+        if rr.get("ok"):
+            repo_hits = filter_repos(
+                extract_googlesource_repos(rr["body"]), pattern
+            )
+
+    # Cap local stdout for agents
+    local_out = local.get("stdout") or ""
+    if compact and local_out:
+        lines = local_out.splitlines()
+        # keep only match lines (rg uses ':' for matches)
+        keep = [ln for ln in lines if ":" in ln and not ln.startswith("--")]
+        if len(keep) > max_local:
+            keep = keep[:max_local] + [f"… ({len(keep) - max_local} more local hits)"]
+        local_out = "\n".join(keep) if keep else local_out[:2000]
+
     payload = {
         "topic": args.topic,
         "pattern": pattern,
         "priority_docs": pri,
-        "local": {
-            "tool": local.get("tool"),
-            "stdout": local.get("stdout"),
-        },
+        "local": {"tool": local.get("tool"), "stdout": local_out},
         "remote_candidates": cand_u,
         "remote_results": remote_results,
+        "googlesource_repos": repo_hits,
         "advice": (
-            "Prefer priority_docs and local hits. Only fetch remote when local is insufficient. "
-            "Never invent CVE IDs. For bulletins use: research-tool bulletin pixel YYYY-MM"
+            "Use research-tool (not curl). Prefer priority_docs; "
+            "repos for googlesource names; bulletin pixel YYYY-MM for CVEs. "
+            "Never invent CVE IDs."
         ),
     }
 
     if args.json:
         emit(payload, as_json=True)
     else:
-        print(f"# find: {args.topic!r}")
+        print(f"# find: {args.topic!r}  (compact={compact})")
         if pri:
-            print("\n## Priority local docs")
+            print("## Priority local docs")
             for p in pri:
                 print(f"  - {p}")
-        print("\n## Local search")
-        print(local.get("stdout") or "(no matches)")
+        print("## Local hits (capped)")
+        print(local_out or "(no matches)")
         if cand_u:
-            print("\n## Remote candidate URLs")
+            print("## Remote candidates")
             for u in cand_u:
                 print(f"  - {u}")
         if remote_results:
-            print("\n## Remote probe")
+            print("## Remote probe")
             for e in remote_results:
                 mc = e.get("match_count", "-")
                 print(f"  [{e.get('http_code')}] matches={mc}  {e['url']}")
                 for m in e.get("matches") or []:
-                    if "match" in m:
-                        print(f"      L{m['line']}: {m['match'][:120]}")
-        print(f"\n# {payload['advice']}")
+                    sn = m.get("snippet") or m.get("match") or ""
+                    print(f"      L{m['line']}: {sn[:120]}")
+        if repo_hits:
+            print(f"## Googlesource repos matching {pattern!r}")
+            for h in repo_hits[:20]:
+                print(f"  - {h['name']}  {h['url']}")
+        elif args.remote or getattr(args, "repos", False):
+            print("## Googlesource repos: (no name match — try: research-tool repos husky)")
+        print(f"# {payload['advice']}")
     return 0
 
 
@@ -1507,10 +1847,15 @@ Quick recipes (local LLM / agent):
   ./research-tool.py probe  'https://source.android.com/docs/security/bulletin/2026-02-01'
   ./research-tool.py bulletin pixel 2026-02 --check
 
-  # 4. Grep remote page (your husky example)
+  # 4. Grep remote (snippets — never raw curl | grep HTML)
   ./research-tool.py grep husky \\
       'https://source.android.com/docs/setup/build/building' \\
       'https://source.android.com/docs/setup/reference/build-numbers'
+
+  # 4b. Googlesource repo NAMES (Pixel 8 Pro trees use shusky, not husky alone)
+  ./research-tool.py repos husky
+  ./research-tool.py repos 'kernel/(gs|common)|shusky'
+  ./research-tool.py grep husky 'https://android.googlesource.com/'   # auto → repos mode
 
   # 5. Extract structure without flooding context
   ./research-tool.py title URL
@@ -1605,19 +1950,56 @@ def build_parser() -> argparse.ArgumentParser:
     add_cache_flags(sp)
     sp.set_defaults(func=cmd_text, plain=True)
 
-    sp = add_sub("grep", help="Fetch URL(s) and search pattern")
+    sp = add_sub("grep", help="Fetch URL(s) and search (snippets; no HTML dumps)")
     sp.add_argument("pattern", help="regex pattern")
     sp.add_argument("urls", nargs="+", help="one or more URLs")
     sp.add_argument("--case-sensitive", action="store_true")
-    sp.add_argument("-C", "--context", type=int, default=2)
-    sp.add_argument("--max-matches", type=int, default=30)
+    sp.add_argument("-C", "--context", type=int, default=1)
+    sp.add_argument("--max-matches", type=int, default=DEFAULT_GREP_MATCHES)
+    sp.add_argument(
+        "--snippet",
+        type=int,
+        default=DEFAULT_SNIPPET,
+        help=f"chars around match (default {DEFAULT_SNIPPET})",
+    )
     sp.add_argument(
         "--plain",
         action="store_true",
-        help="strip HTML before matching (good for DevSite chrome)",
+        help="force strip HTML (default already auto-strips HTML)",
+    )
+    sp.add_argument(
+        "--raw-lines",
+        action="store_true",
+        help="old behaviour: dump long HTML lines (bad for agents)",
+    )
+    sp.add_argument(
+        "--force-html",
+        action="store_true",
+        help="do not switch googlesource / to repos mode",
     )
     add_cache_flags(sp)
     sp.set_defaults(func=cmd_grep)
+
+    sp = add_sub(
+        "repos",
+        help="Search android.googlesource.com repo names (prefer over grepping /)",
+    )
+    sp.add_argument("pattern", help="regex against repo name/description")
+    sp.add_argument(
+        "--base",
+        default=GOOGLESURCE_ROOT,
+        help="index URL (default android.googlesource.com/)",
+    )
+    sp.add_argument("--case-sensitive", action="store_true")
+    sp.add_argument("--max", type=int, default=50)
+    sp.add_argument(
+        "--check",
+        action="store_true",
+        help="HTTP-check first hits (slow)",
+    )
+    sp.add_argument("--check-max", type=int, default=10)
+    add_cache_flags(sp)
+    sp.set_defaults(func=cmd_repos)
 
     sp = add_sub("resolve", help="Suggest corrected URL variants")
     sp.add_argument("url")
@@ -1677,7 +2059,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add_sub(
         "find",
-        help="Local-first discovery + optional remote candidate URLs",
+        help="Compact local-first discovery + optional remote/repos",
     )
     sp.add_argument("topic", help="topic or keyword (e.g. husky, bulletin, fbe)")
     sp.add_argument("--pattern", help="override grep pattern (default: topic)")
@@ -1685,6 +2067,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--remote",
         action="store_true",
         help="also fetch/grep remote candidate URLs",
+    )
+    sp.add_argument(
+        "--repos",
+        action="store_true",
+        help="also search googlesource repo index",
+    )
+    sp.add_argument(
+        "--verbose",
+        action="store_true",
+        help="full local rg dump (default is capped/compact)",
+    )
+    sp.add_argument(
+        "--compact",
+        action="store_true",
+        help="explicit compact mode (default)",
     )
     sp.add_argument("--max-remote", type=int, default=5)
     sp.add_argument("--max-matches", type=int, default=30)
