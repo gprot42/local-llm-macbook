@@ -38,4 +38,13 @@ If the user asks for **N steps**, a checklist, or “do A then B then C”:
 2. After each tool result, call the **next** tool immediately.
 3. Do not idle after a partial plan or a single grep/list.
 
+## Empty tool results
+
+If the latest tool output is **empty** / “(no output)” / useless remote HTML grep:
+
+1. **Do not** write a revised plan or Goal/Progress template.
+2. **Do** run a **local** tool next (`ls`/`glob`/`grep`/`read`) on a real workspace path.
+3. If `FileNotFound`, list the **parent** directory — do not invent a new research plan.
+4. Avoid another `curl | grep` of remote pages unless the user only asked for web docs.
+
 Stack-specific detail: [`censored/deepseek-v4-flash-ds4/AGENTS.md`](censored/deepseek-v4-flash-ds4/AGENTS.md).

@@ -331,6 +331,84 @@ _AGENT_CONTINUE_NUDGE = (
     "Do not emit Goal/Progress/Next Steps templates."
 )
 
+_EMPTY_TOOL_NUDGE = (
+    "\n\n[Harness] EMPTY TOOL RESULT: the latest tool output was empty or useless. "
+    "Do NOT write a revised plan, Goal/Progress block, or status essay. "
+    "Your next action MUST be a local workspace tool (bash ls/find, glob, grep, or read) "
+    "on a real project path. Prefer paths already in this chat or under the workspace root. "
+    "Do not curl|grep remote HTML unless the user only asked for web docs. "
+    "If a path FileNotFound, list its parent directory next — do not invent a new research plan."
+)
+
+_EMPTY_TOOL_EXACT = frozenset(
+    {
+        "(no output)",
+        "no output",
+        "(empty)",
+        "empty",
+        "empty response",
+        "null",
+        "none",
+        "[]",
+        "{}",
+        "''",
+        '""',
+    }
+)
+
+
+def _is_empty_tool_content(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    low = t.lower()
+    if low in _EMPTY_TOOL_EXACT:
+        return True
+    # Kilo sometimes returns only a short empty-marker line (exact-ish)
+    if len(t) <= 40 and low in _EMPTY_TOOL_EXACT | {
+        "no matches",
+        "no matches found",
+        "(no matches)",
+    }:
+        return True
+    # Whitespace / punctuation only
+    if not any(ch.isalnum() for ch in t):
+        return True
+    return False
+
+
+def _recent_empty_tool_streak(messages: list[dict] | None) -> int:
+    """Count consecutive empty tool results at the tail (after last user/assistant text)."""
+    if not messages:
+        return 0
+    empty = 0
+    saw_tool = False
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role in ("tool", "function"):
+            saw_tool = True
+            if _is_empty_tool_content(_message_text(msg)):
+                empty += 1
+            else:
+                break
+            continue
+        if role == "assistant":
+            # Skip pure assistant tool-call shells; stop if we already counted tools
+            if saw_tool:
+                break
+            # If assistant has substantial content and no trailing tools, streak is 0
+            if not msg.get("tool_calls") and not _is_empty_tool_content(_message_text(msg)):
+                break
+            continue
+        if role == "user":
+            break
+        # system / other
+        if saw_tool:
+            break
+    return empty
+
 
 def _nudge_agent_multi_step(messages: list[dict]) -> None:
     """Append a short multi-step continue rule to the first system message."""
@@ -344,6 +422,28 @@ def _nudge_agent_multi_step(messages: list[dict]) -> None:
         _set_message_text(msg, text + _AGENT_CONTINUE_NUDGE)
         return
     messages.insert(0, {"role": "system", "content": _AGENT_CONTINUE_NUDGE.strip()})
+
+
+def _nudge_empty_tool_recovery(messages: list[dict]) -> bool:
+    """If last tool result(s) empty, inject a local-tool-only recovery system line."""
+    streak = _recent_empty_tool_streak(messages)
+    if streak < 1:
+        return False
+    marker = "[Harness] EMPTY TOOL RESULT:"
+    # Prefer appending to last system message; avoid duplicating
+    for msg in messages:
+        if msg.get("role") != "system":
+            continue
+        text = _message_text(msg)
+        if marker in text:
+            # refresh: keep single copy
+            return True
+        _set_message_text(msg, text + _EMPTY_TOOL_NUDGE)
+        log.info("[agent] empty-tool recovery nudge (streak=%d)", streak)
+        return True
+    messages.insert(0, {"role": "system", "content": _EMPTY_TOOL_NUDGE.strip()})
+    log.info("[agent] empty-tool recovery nudge (streak=%d, new system)", streak)
+    return True
 
 
 def _tool_schema_names(body: dict) -> list[str]:
@@ -396,6 +496,8 @@ def _prepare_body(body: dict) -> dict[str, Any]:
         "tool_choice_in": _tool_choice_repr(body.get("tool_choice")),
         "truncated_tool_msgs": 0,
         "nudged_multi_step": False,
+        "empty_tool_recovery": False,
+        "empty_tool_streak": 0,
         "thinking_off": True,
     }
 
@@ -425,10 +527,14 @@ def _prepare_body(body: dict) -> dict[str, Any]:
         log.info("[mode] compaction → tools stripped, short max_tokens")
         return trace
 
-    # Agentic turns: keep tools; nudge multi-step completion; temp floor.
+    # Agentic turns: keep tools; multi-step + empty-tool recovery nudges; temp floor.
     if _has_tools(body) and isinstance(messages, list):
         _nudge_agent_multi_step(messages)
         trace["nudged_multi_step"] = True
+        streak = _recent_empty_tool_streak(messages)
+        trace["empty_tool_streak"] = streak
+        if streak >= 1 and _nudge_empty_tool_recovery(messages):
+            trace["empty_tool_recovery"] = True
 
     temp = body.get("temperature")
     try:
@@ -455,7 +561,8 @@ def _log_request_harness(body: dict, trace: dict[str, Any], *, stream: bool) -> 
     _harness_log(
         "[harness] req compaction=%s stream=%s %s tools_in=%s tools_out=%s "
         "tool_choice_in=%s tool_choice_out=%s tool_names=[%s] max_tokens=%s "
-        "multi_step_nudge=%s truncate_tools=%s model=%s",
+        "multi_step_nudge=%s empty_tool_recovery=%s empty_tool_streak=%s "
+        "truncate_tools=%s model=%s",
         trace.get("compaction"),
         stream,
         _message_role_counts(body.get("messages")),
@@ -466,6 +573,8 @@ def _log_request_harness(body: dict, trace: dict[str, Any], *, stream: bool) -> 
         names_s,
         mt,
         trace.get("nudged_multi_step"),
+        trace.get("empty_tool_recovery"),
+        trace.get("empty_tool_streak"),
         trace.get("truncated_tool_msgs"),
         body.get("model"),
     )

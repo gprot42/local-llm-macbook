@@ -158,8 +158,11 @@ curl -s http://127.0.0.1:8080/healthz
 # tail harness traces (no message bodies):
 #   [harness] req compaction=False tools_in=12 tool_choice_in=auto ...
 #   [harness] resp stream finish='tool_calls' tool_calls=[bash,read] ...
+#   empty_tool_recovery=True  → last tool was empty; proxy forced local-tool recovery nudge
 tail -f /tmp/gemma4_kilo_proxy.log   # if started via nohup; else terminal stdout
 ```
+
+**Empty tool recovery:** if the latest tool result is empty, the proxy injects a system nudge: do not write a revised plan — next action must be a local `ls`/`glob`/`grep`/`read`.
 
 Reload Kilo after changing `kilo.json`. After a failed overflow session, **start a new chat** (the dead session cannot recover).
 
