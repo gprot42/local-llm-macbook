@@ -101,36 +101,49 @@ def _tool_choice_disallows_tools(tool_choice: Any) -> bool:
     return isinstance(tool_choice, dict) and tool_choice.get("type") == "none"
 
 
+def _has_tools(body: dict) -> bool:
+    tools = body.get("tools")
+    return isinstance(tools, list) and len(tools) > 0
+
+
 def _looks_like_compaction(body: dict) -> bool:
-    if _tool_choice_disallows_tools(body.get("tool_choice")):
+    """Detect Kilo session-compaction turns — must NOT false-positive agent turns.
+
+    Critical bug (fixed): scanning the full system prompt matched phrases like
+    "Do not re-summarize the conversation history" from agent harness rules,
+    so *every* agent request was treated as compaction and tools were stripped.
+    Kilo then could never tool-call.
+
+    Rules:
+      1. If tools are present and tool_choice is not none → agentic, never compact.
+      2. tool_choice=none alone is a strong signal (Kilo compaction / text-only).
+      3. Otherwise only inspect the *latest user* message for summary wording
+         (never the system prompt).
+    """
+    choice_none = _tool_choice_disallows_tools(body.get("tool_choice"))
+    if _has_tools(body) and not choice_none:
+        return False
+
+    if choice_none:
         return True
-    # Prefer system + latest user only (full history false-positives on "summarize").
-    parts: list[str] = []
+
+    # Text-only / no tools: only the latest user message (avoid system false positives).
     messages = body.get("messages") or []
     if not isinstance(messages, list):
         return False
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        if msg.get("role") == "system":
-            t = _message_text(msg)
-            if t:
-                parts.append(t)
+    blob = ""
     for msg in reversed(messages):
         if isinstance(msg, dict) and msg.get("role") == "user":
-            t = _message_text(msg)
-            if t:
-                parts.append(t)
+            blob = _message_text(msg).lower()
             break
-    blob = "\n".join(parts).lower()
     if not blob:
         return False
     if any(h in blob for h in _COMPACTION_HINTS):
         return True
-    # Regex fallbacks for slight prompt wording drift
     return bool(
         re.search(r"summariz(?:e|ing)\b.*\b(?:conversation|session|history|context|chat)\b", blob)
         or re.search(r"\bcompact(?:ion|ing)?\b.*\b(?:context|session|conversation|history)\b", blob)
+        or re.search(r"\bagent\s*=\s*compaction\b", blob)
     )
 
 

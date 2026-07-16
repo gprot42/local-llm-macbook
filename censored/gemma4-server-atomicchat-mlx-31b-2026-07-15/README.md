@@ -143,7 +143,7 @@ Cause: auto-compaction still sent `tools`, so Gemma kept exploring instead of wr
 
 | Layer | What it does |
 |-------|----------------|
-| `gemma4_kilo_proxy.py` (default) | **Thinking OFF** (`chat_template_kwargs.enable_thinking=false`) so Kilo gets `content` not empty/`reasoning`; compaction turns strip tools; remap leftover reasoning→content on SSE; truncate large tool results |
+| `gemma4_kilo_proxy.py` (default) | **Thinking OFF** so Kilo gets `content`; **never strip tools** when `tools` + `tool_choice≠none` (agent turns); compaction only for `tool_choice=none` / real summary user turns; remap reasoning→content; truncate huge tool results |
 | `kilo.json` `compaction.reserved` | Leaves ~12k tokens free so compact runs before the window is full |
 | `agent.compaction` prompt | Forces ≤~40 line plain text — no Goal/Progress spam |
 | Tighter `tool_output` | Smaller dumps so prune/truncation has less to keep |
