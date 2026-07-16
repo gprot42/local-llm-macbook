@@ -322,6 +322,27 @@ def _rewrite_sse_chunk(line: bytes) -> bytes:
     return b"data: " + json.dumps(data, ensure_ascii=False).encode("utf-8") + b"\n"
 
 
+_AGENT_CONTINUE_NUDGE = (
+    "\n\n[Harness] Multi-step tasks: keep using tools until every requested step is done. "
+    "Do not stop after 1 of N. Prefer tool_calls over plans/status when work remains. "
+    "Do not emit Goal/Progress/Next Steps templates."
+)
+
+
+def _nudge_agent_multi_step(messages: list[dict]) -> None:
+    """Append a short multi-step continue rule to the first system message."""
+    marker = "[Harness] Multi-step tasks:"
+    for msg in messages:
+        if msg.get("role") != "system":
+            continue
+        text = _message_text(msg)
+        if marker in text:
+            return
+        _set_message_text(msg, text + _AGENT_CONTINUE_NUDGE)
+        return
+    messages.insert(0, {"role": "system", "content": _AGENT_CONTINUE_NUDGE.strip()})
+
+
 def _prepare_body(body: dict) -> None:
     # Always disable thinking for Kilo — empty content breaks the agent loop.
     _disable_thinking(body)
@@ -346,7 +367,11 @@ def _prepare_body(body: dict) -> None:
         log.info("[mode] compaction → tools stripped, short max_tokens")
         return
 
-    # Agentic turns: leave tools alone; optional light temp floor (mlx_lm default is 0.35).
+    # Agentic turns: keep tools; nudge multi-step completion; temp floor.
+    if _has_tools(body) and isinstance(messages, list):
+        _nudge_agent_multi_step(messages)
+        log.info("[agent] multi-step continue nudge applied")
+
     temp = body.get("temperature")
     try:
         t = float(temp) if temp is not None else None

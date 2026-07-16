@@ -30,4 +30,12 @@ When the user says **continue** / **keep going** / **continue if you have next s
 4. Do **not** rewrite Goal/Progress/Next Steps templates. Do **not** invent a new feature.
 5. Only ask what to do if there is truly no task in context.
 
+## Multi-step completion
+
+If the user asks for **N steps**, a checklist, or “do A then B then C”:
+
+1. Complete **all** steps before stopping (not 1 of N).
+2. After each tool result, call the **next** tool immediately.
+3. Do not idle after a partial plan or a single grep/list.
+
 Stack-specific detail: [`censored/deepseek-v4-flash-ds4/AGENTS.md`](censored/deepseek-v4-flash-ds4/AGENTS.md).
