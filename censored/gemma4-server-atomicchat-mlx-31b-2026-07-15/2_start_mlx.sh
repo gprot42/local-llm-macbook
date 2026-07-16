@@ -11,9 +11,15 @@
 #
 # OpenAI-compatible API at http://localhost:8080/v1
 #
+# Default architecture (Kilo-safe):
+#   Kilo  →  :8080 gemma4_kilo_proxy  →  :8090 mlx_lm.server
+# Proxy strips tools on compaction turns so summaries stay text-only (prevents
+# ContextOverflowError: "Compaction exhausted after 3 attempts").
+#
 # Usage:
-#   ./2_start_mlx.sh                  # standard mlx_lm.server (no MTP, default)
-#   ./2_start_mlx.sh --with-mtp       # mlx_vlm.server + MTP drafter
+#   ./2_start_mlx.sh                  # proxy + mlx_lm.server (no MTP, default)
+#   ./2_start_mlx.sh --with-mtp       # proxy + mlx_vlm.server + MTP drafter
+#   ./2_start_mlx.sh --no-proxy       # raw mlx on :8080 (curl smoke; not agent-safe)
 #   ./2_start_mlx.sh restart
 #   ./2_start_mlx.sh restart --with-mtp
 #   ./2_start_mlx.sh --port 8081
@@ -33,6 +39,7 @@ HF_REPO="AtomicChat/gemma-4-31B-it-MLX-4bit"
 DRAFT_DIR="gemma-4-31b-it-assistant-mlx-bf16"
 DRAFT_HF_REPO="mlx-community/gemma-4-31B-it-assistant-bf16"
 PORT=8080
+ENGINE_PORT=8090
 HOST="127.0.0.1"
 DO_RESTART=false
 ENABLE_MTP=false
@@ -40,6 +47,9 @@ DRAFT_BLOCK_SIZE=4
 LOW_MEMORY=false
 MAX_KV_SIZE=""
 VERIFY_MTP=true
+# Default on: compaction tool-strip + tool-result truncation for Kilo sessions.
+USE_PROXY=true
+PROXY_DEBUG=false
 
 stop_server_on_port() {
     local port="$1"
@@ -75,17 +85,21 @@ for arg in "$@"; do
         echo "  --max-kv-size N      Max KV tokens (mlx_vlm.server only)"
         echo "  --no-verify-mtp      Skip post-start MTP config + decode speed check"
         echo "  --verify-mtp         Run MTP verify after start (default when MTP on)"
-        echo "  --port PORT          Port to listen on (default: 8080)"
+        echo "  --proxy              Kilo harness proxy on public port (default: on)"
+        echo "  --no-proxy           Raw mlx on public port (no compaction tool-strip)"
+        echo "  --debug              Verbose proxy logging"
+        echo "  --port PORT          Public API port (default: 8080)"
+        echo "  --engine-port PORT   Upstream mlx port when proxy on (default: 8090)"
         echo "  --host HOST          Host to bind (default: 127.0.0.1)"
         echo ""
         echo "  ./verify_mtp.sh       Check MTP on a running server (no restart)"
         echo ""
-        echo "Default (no MTP):"
-        echo "  Kilo Code ──→ http://localhost:$PORT/v1  (mlx_lm.server)"
+        echo "Default (proxy + no MTP):"
+        echo "  Kilo Code ──→ :$PORT gemma4_kilo_proxy ──→ :$ENGINE_PORT mlx_lm.server"
         echo "  Model ID in kilo.json: $MODEL_ID"
         echo ""
         echo "With MTP (--with-mtp):"
-        echo "  Kilo Code ──→ http://localhost:$PORT/v1  (mlx_vlm.server + assistant drafter)"
+        echo "  Kilo Code ──→ :$PORT proxy ──→ :$ENGINE_PORT mlx_vlm.server + assistant"
         echo ""
         exit 0
     }
@@ -98,7 +112,11 @@ while [[ $i -lt ${#args[@]} ]]; do
         restart) DO_RESTART=true; ((i+=1)) ;;
         --no-mtp) ENABLE_MTP=false; ((i+=1)) ;;
         --with-mtp|--mtp) ENABLE_MTP=true; ((i+=1)) ;;
+        --proxy) USE_PROXY=true; ((i+=1)) ;;
+        --no-proxy) USE_PROXY=false; ((i+=1)) ;;
+        --debug) PROXY_DEBUG=true; ((i+=1)) ;;
         --port) PORT="${args[$((i+1))]:-$PORT}"; ((i+=2)) ;;
+        --engine-port) ENGINE_PORT="${args[$((i+1))]:-$ENGINE_PORT}"; ((i+=2)) ;;
         --host) HOST="${args[$((i+1))]:-$HOST}"; ((i+=2)) ;;
         --draft-block-size) DRAFT_BLOCK_SIZE="${args[$((i+1))]:-$DRAFT_BLOCK_SIZE}"; ((i+=2)) ;;
         --low-memory) LOW_MEMORY=true; ((i+=1)) ;;
@@ -108,6 +126,17 @@ while [[ $i -lt ${#args[@]} ]]; do
         *) ((i+=1)) ;;
     esac
 done
+
+# Public port is always PORT. Engine binds ENGINE_PORT when proxy is on.
+if [ "$USE_PROXY" = true ]; then
+    if [ "$PORT" = "$ENGINE_PORT" ]; then
+        ENGINE_PORT=$((PORT + 10))
+        echo "→ Engine port collides with public port; using engine port $ENGINE_PORT"
+    fi
+    BIND_PORT="$ENGINE_PORT"
+else
+    BIND_PORT="$PORT"
+fi
 
 # MTP verify only applies when speculative decoding is on
 if [ "$ENABLE_MTP" = false ]; then
@@ -178,6 +207,9 @@ print(f'→ Sample:       {content!r}')
 
 if [ "$DO_RESTART" = true ]; then
     stop_server_on_port "$PORT"
+    if [ "$USE_PROXY" = true ]; then
+        stop_server_on_port "$ENGINE_PORT"
+    fi
     echo ""
 fi
 
@@ -195,6 +227,7 @@ fi
 echo "=== Gemma 4 31B IT AtomicChat (MLX 4-bit, 2026-07-15) ==="
 echo "→ Model:    $MODEL_DIR"
 echo "→ MTP:      $([ "$ENABLE_MTP" = true ] && echo "enabled (mlx_vlm.server)" || echo "disabled (mlx_lm.server)")"
+echo "→ Proxy:    $([ "$USE_PROXY" = true ] && echo "on (:$PORT → engine :$BIND_PORT)" || echo "off (raw mlx on :$PORT)")"
 echo "→ Endpoint: http://localhost:$PORT/v1"
 if [ "$ENABLE_MTP" = true ]; then
     echo "→ Expect:   startup verifies --draft-kind mtp and prints decode tok/s"
@@ -256,11 +289,14 @@ echo ""
 
 # ── Cleanup handler ───────────────────────────────────────────────────────────
 SERVER_PID=""
+PROXY_PID=""
 cleanup() {
     echo ""
     echo "→ Shutting down server ..."
+    [ -n "$PROXY_PID" ] && kill -TERM "$PROXY_PID" 2>/dev/null
     [ -n "$SERVER_PID" ] && kill -TERM "$SERVER_PID" 2>/dev/null
     sleep 1
+    [ -n "$PROXY_PID" ] && kill -KILL "$PROXY_PID" 2>/dev/null
     [ -n "$SERVER_PID" ] && kill -KILL "$SERVER_PID" 2>/dev/null
     exit 0
 }
@@ -276,11 +312,11 @@ if [ "$ENABLE_MTP" = true ]; then
         VLM_EXTRA_ARGS+=(--max-kv-size "$MAX_KV_SIZE")
     fi
     echo "→ Launching mlx_vlm.server with MTP:"
-    echo "  mlx_vlm.server --model $MODEL_PATH --draft-model $DRAFT_PATH --draft-kind mtp --draft-block-size $DRAFT_BLOCK_SIZE --port $PORT"
+    echo "  mlx_vlm.server --model $MODEL_PATH --draft-model $DRAFT_PATH --draft-kind mtp --draft-block-size $DRAFT_BLOCK_SIZE --port $BIND_PORT"
     mlx_vlm.server \
         --model "$MODEL_PATH" \
         --host "$HOST" \
-        --port "$PORT" \
+        --port "$BIND_PORT" \
         --trust-remote-code \
         --draft-model "$DRAFT_PATH" \
         --draft-kind mtp \
@@ -291,11 +327,11 @@ if [ "$ENABLE_MTP" = true ]; then
 else
     # mlx_lm.server — sampling defaults for Kilo agent use (see kilo.json).
     echo "→ Launching mlx_lm.server without MTP:"
-    echo "  mlx_lm.server --model $MODEL_PATH --port $PORT --temp 0.35 --top-p 0.95"
+    echo "  mlx_lm.server --model $MODEL_PATH --port $BIND_PORT --temp 0.35 --top-p 0.95"
     mlx_lm.server \
         --model "$MODEL_PATH" \
         --host "$HOST" \
-        --port "$PORT" \
+        --port "$BIND_PORT" \
         --trust-remote-code \
         --temp 0.35 \
         --top-p 0.95 \
@@ -305,22 +341,49 @@ else
 fi
 SERVER_PID=$!
 
-# ── Wait for server to be ready ───────────────────────────────────────────────
-echo "→ Waiting for server to be ready ..."
+# ── Wait for engine to be ready ───────────────────────────────────────────────
+echo "→ Waiting for MLX engine on :$BIND_PORT ..."
 for i in $(seq 1 180); do
-    if curl -sf --max-time 1 "http://${HOST}:${PORT}/v1/models" >/dev/null 2>&1; then
-        echo "→ Server ready after ${i}s"
+    if curl -sf --max-time 1 "http://${HOST}:${BIND_PORT}/v1/models" >/dev/null 2>&1; then
+        echo "→ Engine ready after ${i}s"
         break
     fi
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
         echo "ERROR: server exited during startup."
-        if lsof -ti ":${PORT}" >/dev/null 2>&1; then
-            echo "       Port ${PORT} is in use. Run: ./2_start_mlx.sh restart"
+        if lsof -ti ":${BIND_PORT}" >/dev/null 2>&1; then
+            echo "       Port ${BIND_PORT} is in use. Run: ./2_start_mlx.sh restart"
         fi
         exit 1
     fi
     sleep 1
 done
+
+# ── Optional Kilo harness proxy on public PORT ────────────────────────────────
+if [ "$USE_PROXY" = true ]; then
+    PROXY_ARGS=(--host "$HOST" --port "$PORT" --upstream "http://${HOST}:${BIND_PORT}")
+    if [ "$PROXY_DEBUG" = true ]; then
+        PROXY_ARGS+=(--verbose)
+    fi
+    echo "→ Launching gemma4_kilo_proxy on :$PORT → engine :$BIND_PORT"
+    python3 "$SCRIPT_DIR/gemma4_kilo_proxy.py" "${PROXY_ARGS[@]}" &
+    PROXY_PID=$!
+    echo "→ Waiting for proxy on :$PORT ..."
+    for i in $(seq 1 30); do
+        if curl -sf --max-time 1 "http://${HOST}:${PORT}/healthz" >/dev/null 2>&1; then
+            echo "→ Proxy ready after ${i}s"
+            break
+        fi
+        if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+            echo "ERROR: gemma4_kilo_proxy exited during startup."
+            exit 1
+        fi
+        sleep 1
+    done
+    if ! curl -sf --max-time 1 "http://${HOST}:${PORT}/v1/models" >/dev/null 2>&1; then
+        echo "ERROR: proxy is up but /v1/models failed (engine unreachable?)."
+        exit 1
+    fi
+fi
 
 # ── MTP smoke / verify (rollback, wedged BatchGenerator, visible confirmation) ─
 if [ "$ENABLE_MTP" = true ]; then
@@ -355,6 +418,12 @@ if [ "$ENABLE_MTP" = true ]; then
 else
     echo "  READY — mlx_lm.server (no MTP)"
 fi
+if [ "$USE_PROXY" = true ]; then
+    echo "  Harness:    gemma4_kilo_proxy (compaction tool-strip ON)"
+    echo "  Path:       :$PORT proxy → :$BIND_PORT engine"
+else
+    echo "  Harness:    none (raw engine — compaction may fail in long Kilo sessions)"
+fi
 echo "============================================================"
 echo "  OpenAI API:   http://localhost:$PORT/v1"
 echo "  Model ID:     $MODEL_ID"
@@ -363,6 +432,9 @@ echo "  kilo.json model:  openai-compatible/$MODEL_ID"
 echo ""
 echo "  curl test:"
 echo "    curl http://localhost:$PORT/v1/models"
+if [ "$USE_PROXY" = true ]; then
+    echo "    curl http://localhost:$PORT/healthz"
+fi
 if [ "$ENABLE_MTP" = true ]; then
     echo "  MTP verify (anytime):"
     echo "    ./verify_mtp.sh"

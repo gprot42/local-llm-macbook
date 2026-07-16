@@ -81,7 +81,8 @@ The assistant does not replace the target — it only proposes tokens; the 31B m
 | File | Purpose |
 |---|---|
 | `1_setup_download.sh` | Create venv, install mlx/mlx-lm/mlx-vlm, download AtomicChat target + MTP assistant |
-| `2_start_mlx.sh` | Start server on port 8080 (no MTP by default; pass `--with-mtp` to enable) |
+| `2_start_mlx.sh` | Start Kilo proxy on `:8080` → MLX engine on `:8090` (no MTP by default; pass `--with-mtp` / `--no-proxy`) |
+| `gemma4_kilo_proxy.py` | Harness proxy: strip tools on compaction, truncate large tool results |
 | `apply_local_patches.sh` | Copy `patches/` into the venv on each start (survives `pip install -U`) |
 | `kilo.json` | Kilo Code config for this project (model + Gemma temps + harness) |
 | `../../kilo.json` | **Monorepo global** Kilo (all providers + default model) — install with `../../install_kilo.sh` |
@@ -124,11 +125,39 @@ Keep this folder’s `kilo.json` in sync for Gemma-specific temps/prompts when e
 | Model ID | `gemma-4-31b-it-atomicchat-mlx-4bit` | Recommended; matches the local server model |
 | Model ID (alt.) | `default_model` | Also works — mapped to the same local weights at startup |
 | Context limit | 32k | Faster prefill; fits agent sessions without OOM |
-| Output limit | 8k | Enough for edits; reduces truncated tool JSON |
+| Output limit | 4k | Room for edits; leaves headroom for compaction |
+| `compaction.reserved` | 12288 | Start auto-compact earlier so summaries fit |
+| `agent.compaction` | short plain-text prompt | Stop Goal/Progress template bloat on summarize turns |
+| `tool_output` | 200 lines / 16 KiB | Cap tool dumps before they fill the window |
 | Agent temp | 0.35 | Gemma at `temperature=0` stalls after tool calls |
 | Reasoning | **Off** in UI | Checked → infinite `<thinking>` loops |
+| Public API | `:8080` via `gemma4_kilo_proxy` | Strips tools on compaction (default) |
 
-> For heavier agent tuning (proxy, fuzzy edits, Heretic model), use
+### Harness reliability (ContextOverflow / compaction)
+
+Long Kilo sessions used to hit:
+
+`ContextOverflowError: Compaction exhausted: context still exceeds model limits after 3 attempts`
+
+Cause: auto-compaction still sent `tools`, so Gemma kept exploring instead of writing a short summary (`pruned=0` in Kilo logs). Fix in this stack:
+
+| Layer | What it does |
+|-------|----------------|
+| `gemma4_kilo_proxy.py` (default) | Detects compaction turns → `tool_choice=none`, strips tools, caps summary `max_tokens`, truncates large tool results |
+| `kilo.json` `compaction.reserved` | Leaves ~12k tokens free so compact runs before the window is full |
+| `agent.compaction` prompt | Forces ≤~40 line plain text — no Goal/Progress spam |
+| Tighter `tool_output` | Smaller dumps so prune/truncation has less to keep |
+
+```bash
+./2_start_mlx.sh                 # proxy :8080 → engine :8090 (default)
+./2_start_mlx.sh --no-proxy      # raw mlx on :8080 (curl smoke only)
+./2_start_mlx.sh restart         # clear both ports, then start
+curl -s http://127.0.0.1:8080/healthz
+```
+
+Reload Kilo after changing `kilo.json`. After a failed overflow session, **start a new chat** (the dead session cannot recover).
+
+> For heavier agent tuning (fuzzy edits, Heretic model, Harmony bias), use
 > `gemma4-server-heretic-31b-mlx`. For coding speed on Qwen, use `qwen3-6-27b-coder-mtplx`.
 
 ## Options

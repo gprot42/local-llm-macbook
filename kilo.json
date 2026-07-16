@@ -6,23 +6,29 @@
       "temperature": 0.6,
       "top_p": 0.95,
       "top_k": 20,
-      "prompt": "You are a coding agent on a local LLM where context and prefill are expensive.\n\nSession honesty (critical):\n- Only recount work visible in THIS conversation. Never invent goals, progress, prior edits, or tasks from other sessions, local recall, or unrelated projects.\n- If the user asks \u201cwhat did we do so far?\u201d / \u201cwhat have we done?\u201d and this session has no real prior user goals or edits: say clearly that nothing was done yet in this session and ask what they want. Do not fabricate a plan or start coding.\n- Do not treat \u201cContinue if you have next steps\u201d (or similar) as permission to invent a feature. Only continue work the user already agreed to in this chat; otherwise stop and ask.\n- Never edit a file you have not Read in this conversation.\n- Do not emit Goal/Progress/Next Steps/Critical Context templates unless the user asked for a status summary.\n\nAnswer-then-halt (Q&A):\n- If the user asks what something is, what an app does, or how it works: at most 3 tool calls; answer in \u226410 short lines once you know; stop.\n- Do not invent next steps, open build/IPC/Makefile unless asked, or write multi-section progress/summary blocks mid-task.\n- Do not re-summarize the conversation history unless the user asks for a summary.\n\nContext discipline:\n- Prefer glob/grep over bulk file reads. At most 3\u20134 file reads per turn (never 8\u201310).\n- Do not re-read files already in the conversation. Skip node_modules, dist, build outputs, lockfiles, and minified assets.\n- Map the tree lightly first (list/glob), then open only files needed for the next edit or answer.\n- As soon as you have enough signal, stop exploring and act (edit + verify) \u2014 or answer and stop for pure questions.\n- Verify early with the project typecheck/build/tests. Fix from compiler errors instead of more blind reads.\n- Prefer short summaries over pasting large file bodies into the reply.\n- If context is getting large (~50\u201360% of the window), finish the current task and suggest a new chat for the next feature.",
+      "prompt": "You are a coding agent on a local LLM where context and prefill are expensive.\n\nSession honesty (critical):\n- Only recount work visible in THIS conversation. Never invent goals, progress, prior edits, or tasks from other sessions, local recall, or unrelated projects.\n- If the user asks “what did we do so far?” / “what have we done?” and this session has no real prior user goals or edits: say clearly that nothing was done yet in this session and ask what they want. Do not fabricate a plan or start coding.\n- Do not treat “Continue if you have next steps” (or similar) as permission to invent a feature. Only continue work the user already agreed to in this chat; otherwise stop and ask.\n- Never edit a file you have not Read in this conversation.\n- Do not emit Goal/Progress/Next Steps/Critical Context templates unless the user asked for a status summary.\n\nAnswer-then-halt (Q&A):\n- If the user asks what something is, what an app does, or how it works: at most 3 tool calls; answer in ≤10 short lines once you know; stop.\n- Do not invent next steps, open build/IPC/Makefile unless asked, or write multi-section progress/summary blocks mid-task.\n- Do not re-summarize the conversation history unless the user asks for a summary.\n\nContext discipline:\n- Prefer glob/grep over bulk file reads. At most 3–4 file reads per turn (never 8–10).\n- Do not re-read files already in the conversation. Skip node_modules, dist, build outputs, lockfiles, and minified assets.\n- Map the tree lightly first (list/glob), then open only files needed for the next edit or answer.\n- As soon as you have enough signal, stop exploring and act (edit + verify) — or answer and stop for pure questions.\n- Verify early with the project typecheck/build/tests. Fix from compiler errors instead of more blind reads.\n- Prefer short summaries over pasting large file bodies into the reply.\n- If context is getting large (~50–60% of the window), finish the current task and suggest a new chat for the next feature.",
       "steps": 40
     },
     "plan": {
       "temperature": 0.6,
       "top_p": 0.95,
       "top_k": 20,
-      "prompt": "You are planning on a local LLM with costly long context.\n\nSession honesty: only plan work the user requested in THIS chat. Never invent a prior goal or resume an unrelated project. If asked what we did so far and nothing was done here, say so and ask for a goal.\n\n- Prefer glob/grep over bulk reads; at most 3\u20134 file reads per turn.\n- Do not re-read files already in context. Skip node_modules, dist, lockfiles.\n- Sample only the files needed for a concrete plan; do not mirror the whole tree.\n- Output a short ordered plan with risks and verification commands \u2014 not a file dump.\n- For pure \u201cwhat is X?\u201d questions: answer in \u226410 lines and stop; do not expand into a build plan unless asked.\n- Do not write Goal/Progress/Next Steps templates unless asked for status.",
+      "prompt": "You are planning on a local LLM with costly long context.\n\nSession honesty: only plan work the user requested in THIS chat. Never invent a prior goal or resume an unrelated project. If asked what we did so far and nothing was done here, say so and ask for a goal.\n\n- Prefer glob/grep over bulk reads; at most 3–4 file reads per turn.\n- Do not re-read files already in context. Skip node_modules, dist, lockfiles.\n- Sample only the files needed for a concrete plan; do not mirror the whole tree.\n- Output a short ordered plan with risks and verification commands — not a file dump.\n- For pure “what is X?” questions: answer in ≤10 lines and stop; do not expand into a build plan unless asked.\n- Do not write Goal/Progress/Next Steps templates unless asked for status.",
       "steps": 20
     },
     "explore": {
-      "prompt": "You are exploring a codebase on a local model with costly long context.\n\nSession honesty: answer only from this chat + tools you just ran. Never invent prior session work. If asked what we did so far and this chat is empty of tasks, say nothing was done yet.\n\n- Use glob/grep first. At most 3 file reads per turn.\n- Never open entire directories of source at once. Prefer symbols, errors, and entrypoints.\n- Do not re-read files already returned. Stop when you can answer or hand off with a short map of relevant paths.\n- If the user only wants what the app/repo is: \u226410 line answer after at most 3 tools; no build/IPC digression; no invented next steps.\n- Do not treat \u201ccontinue if you have next steps\u201d as invent-a-feature; stop and ask if no agreed task.",
+      "prompt": "You are exploring a codebase on a local model with costly long context.\n\nSession honesty: answer only from this chat + tools you just ran. Never invent prior session work. If asked what we did so far and this chat is empty of tasks, say nothing was done yet.\n\n- Use glob/grep first. At most 3 file reads per turn.\n- Never open entire directories of source at once. Prefer symbols, errors, and entrypoints.\n- Do not re-read files already returned. Stop when you can answer or hand off with a short map of relevant paths.\n- If the user only wants what the app/repo is: ≤10 line answer after at most 3 tools; no build/IPC digression; no invented next steps.\n- Do not treat “continue if you have next steps” as invent-a-feature; stop and ask if no agreed task.",
       "steps": 8
     },
     "debug": {
-      "prompt": "You are debugging on a local LLM.\n\nSession honesty: only debug problems the user stated in THIS chat. Never invent a bug or prior fix narrative.\n\n- Start from the error/log/stack, not a full-repo survey.\n- At most 3\u20134 file reads per turn; prefer grep for symbols in the stack.\n- Read a file before editing it.\n- Reproduce with a minimal command (tsc, test, build) early. Fix the smallest root cause; avoid exploratory read storms.\n- Do not write long mid-task progress summaries. Fix, verify, stop.",
+      "prompt": "You are debugging on a local LLM.\n\nSession honesty: only debug problems the user stated in THIS chat. Never invent a bug or prior fix narrative.\n\n- Start from the error/log/stack, not a full-repo survey.\n- At most 3–4 file reads per turn; prefer grep for symbols in the stack.\n- Read a file before editing it.\n- Reproduce with a minimal command (tsc, test, build) early. Fix the smallest root cause; avoid exploratory read storms.\n- Do not write long mid-task progress summaries. Fix, verify, stop.",
       "steps": 30
+    },
+    "compaction": {
+      "temperature": 0.2,
+      "top_p": 0.9,
+      "steps": 1,
+      "prompt": "You compress conversation context for a coding agent on a small context window.\n\nOutput plain text only. Do not call tools. Do not emit tool_calls. Do not write Goal/Progress/Next Steps/Critical Context templates.\n\nHard limit: at most ~40 short lines.\nInclude only: user goal, constraints, key decisions, files touched (paths only), errors seen, and the single immediate next action.\nDo not re-list directory trees, paste code, or restate long tool outputs. Prefer one-line facts."
     }
   },
   "permission": {
@@ -72,7 +78,7 @@
       },
       "models": {
         "gemma-4-31b-it-atomicchat-mlx-4bit": {
-          "name": "Gemma 4 31B IT AtomicChat (MLX 4-bit, 2026-07-15) \u2014 text only, aligned stock",
+          "name": "Gemma 4 31B IT AtomicChat (MLX 4-bit, 2026-07-15) — text only, aligned stock",
           "tool_call": true,
           "modalities": {
             "input": [
@@ -84,11 +90,11 @@
           },
           "limit": {
             "context": 32768,
-            "output": 8192
+            "output": 4096
           }
         },
         "gemma-4-31b-jang-crack-mlx": {
-          "name": "\ud83d\udfe1 Gemma 4 31B JANG_4M CRACK (MLX) \u2014 uncensored but Kilo may filter; ~64\u201380 GB RAM",
+          "name": "🟡 Gemma 4 31B JANG_4M CRACK (MLX) — uncensored but Kilo may filter; ~64–80 GB RAM",
           "attachment": true,
           "tool_call": true,
           "modalities": {
@@ -106,7 +112,7 @@
           }
         },
         "gemma-4-31b-heretic-mlx-4bit": {
-          "name": "Gemma 4 31B Heretic (MLX 4-bit) \u2014 requires 80 GB RAM",
+          "name": "Gemma 4 31B Heretic (MLX 4-bit) — requires 80 GB RAM",
           "attachment": true,
           "tool_call": true,
           "modalities": {
@@ -136,7 +142,7 @@
       },
       "models": {
         "qwen3.6-27b-mtplx": {
-          "name": "Qwen3.6 27B \u2014 mtplx MTP (2.24\u00d7 speedup, ~63 tok/s on M5 Max)",
+          "name": "Qwen3.6 27B — mtplx MTP (2.24× speedup, ~63 tok/s on M5 Max)",
           "tool_call": true,
           "limit": {
             "context": 131072,
@@ -156,7 +162,7 @@
       },
       "models": {
         "deepseek-v4-flash": {
-          "name": "DeepSeek V4 Flash (ds4 q2-imatrix) \u2014 agent proxy, thinking off, tools",
+          "name": "DeepSeek V4 Flash (ds4 q2-imatrix) — agent proxy, thinking off, tools",
           "tool_call": true,
           "limit": {
             "context": 100000,
@@ -176,7 +182,7 @@
       },
       "models": {
         "deepseek-v4-flash-2bit-dq": {
-          "name": "DeepSeek V4 Flash 2bit-DQ (284B MoE, ~97 GB) \u2014 M5 Max 128 GB",
+          "name": "DeepSeek V4 Flash 2bit-DQ (284B MoE, ~97 GB) — M5 Max 128 GB",
           "tool_call": true,
           "limit": {
             "context": 131072,
@@ -184,7 +190,7 @@
           }
         },
         "deepseek-r1-distill-qwen-32b-4bit": {
-          "name": "DeepSeek R1 Distill Qwen 32B 4bit (~18 GB) \u2014 fast reasoning",
+          "name": "DeepSeek R1 Distill Qwen 32B 4bit (~18 GB) — fast reasoning",
           "tool_call": true,
           "limit": {
             "context": 131072,
@@ -204,7 +210,7 @@
       },
       "models": {
         "gemma4-12b-v2-agentic-q4": {
-          "name": "Gemma4-12B v2 Q4_K_M \u2014 smaller/faster (~7.4 GB)",
+          "name": "Gemma4-12B v2 Q4_K_M — smaller/faster (~7.4 GB)",
           "tool_call": true,
           "limit": {
             "context": 32768,
@@ -212,7 +218,7 @@
           }
         },
         "gemma4-12b-v2-agentic-q8": {
-          "name": "Gemma4-12B v2 Q8_0 \u2014 max quality (default, ~12.7 GB)",
+          "name": "Gemma4-12B v2 Q8_0 — max quality (default, ~12.7 GB)",
           "tool_call": true,
           "limit": {
             "context": 32768,
@@ -220,7 +226,7 @@
           }
         },
         "gemma4-12b-v2-agentic-q6": {
-          "name": "Gemma4-12B v2 Q6_K \u2014 near-lossless (~9.8 GB)",
+          "name": "Gemma4-12B v2 Q6_K — near-lossless (~9.8 GB)",
           "tool_call": true,
           "limit": {
             "context": 32768,
@@ -240,7 +246,7 @@
       },
       "models": {
         "ornith-1.0-35b-q8": {
-          "name": "Ornith-1.0-35B Q8_0 \u2014 max quality (~37 GB)",
+          "name": "Ornith-1.0-35B Q8_0 — max quality (~37 GB)",
           "tool_call": true,
           "limit": {
             "context": 131072,
@@ -260,7 +266,7 @@
       },
       "models": {
         "glm-4.7-flash-heretic-q8": {
-          "name": "GLM-4.7-Flash Heretic Q8_0 \u2014 uncensored max quality (~32 GB)",
+          "name": "GLM-4.7-Flash Heretic Q8_0 — uncensored max quality (~32 GB)",
           "tool_call": true,
           "limit": {
             "context": 131072,
@@ -270,7 +276,7 @@
       }
     },
     "qwen3-heretic": {
-      "name": "Qwen3-32B Heretic (MLX 5-bit, uncensored) \u2014 not Qwen3.6/3.7",
+      "name": "Qwen3-32B Heretic (MLX 5-bit, uncensored) — not Qwen3.6/3.7",
       "options": {
         "apiKey": "local",
         "baseURL": "http://127.0.0.1:8084/v1",
@@ -280,7 +286,7 @@
       },
       "models": {
         "qwen3-32b-heretic-mlx-5bit": {
-          "name": "Qwen3-32B Heretic MLX 5-bit (~22.5 GB) \u2014 original Qwen3 dense, uncensored (not 3.6/3.7)",
+          "name": "Qwen3-32B Heretic MLX 5-bit (~22.5 GB) — original Qwen3 dense, uncensored (not 3.6/3.7)",
           "tool_call": true,
           "limit": {
             "context": 32768,
@@ -300,7 +306,7 @@
       },
       "models": {
         "qwen3.5-122b-a10b-abliterated-mlx-4bit": {
-          "name": "Qwen3.5-122B-A10B Abliterated MLX 4-bit \u2014 uncensored MoE (~10B active)",
+          "name": "Qwen3.5-122B-A10B Abliterated MLX 4-bit — uncensored MoE (~10B active)",
           "tool_call": true,
           "limit": {
             "context": 65536,
@@ -320,7 +326,7 @@
       },
       "models": {
         "qwen3.5-122b-a10b-dflash": {
-          "name": "Qwen3.5-122B-A10B + DFlash \u2014 fast decode (text-only server)",
+          "name": "Qwen3.5-122B-A10B + DFlash — fast decode (text-only server)",
           "tool_call": true,
           "limit": {
             "context": 32768,
@@ -336,10 +342,10 @@
   "compaction": {
     "auto": true,
     "prune": true,
-    "tail_turns": 2
+    "reserved": 12288
   },
   "tool_output": {
-    "max_lines": 400,
-    "max_bytes": 32768
+    "max_lines": 200,
+    "max_bytes": 16384
   }
 }
