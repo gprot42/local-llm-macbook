@@ -57,7 +57,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 # Defaults
 # ---------------------------------------------------------------------------
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UA = os.environ.get("RESEARCH_UA", "Mozilla/5.0")
 DEFAULT_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "30"))
@@ -980,6 +980,52 @@ def is_googlesource_index(url: str) -> bool:
 
 
 
+
+def suggest_gitiles_blob_fixes(url: str) -> list[str]:
+    """When a blob 404s, suggest likely renames (dwc3_core.h → core.h) and parent dir."""
+    tips: list[str] = []
+    m = re.search(
+        r"(https?://android\.googlesource\.com/[^/]+(?:/[^/]+)*)/\+/(.+)$",
+        url.rstrip("/"),
+    )
+    if not m:
+        return tips
+    repo, rest = m.group(1), m.group(2)
+    # rest = refs/heads/android-mainline/drivers/usb/dwc3/dwc3_core.h
+    parts = rest.split("/")
+    if len(parts) < 2:
+        return tips
+    filename = parts[-1]
+    parent = "/".join(parts[:-1])
+    # strip redundant driver prefix: dwc3_core.h → core.h when under .../dwc3/
+    if "/dwc3" in ("/" + parent) or parent.endswith("dwc3"):
+        for prefix in ("dwc3_", "dwc3-", "DWC3_"):
+            if filename.startswith(prefix):
+                alt = filename[len(prefix):]
+                tips.append(f"{repo}/+/{parent}/{alt}")
+    # common renames
+    alts = {
+        "dwc3_core.h": "core.h",
+        "dwc3_core.c": "core.c",
+        "dwc3_gadget.h": "gadget.h",
+        "dwc3_gadget.c": "gadget.c",
+        "dwc3_common.c": "core.c",
+        "dwc3_ep0.c": "ep0.c",
+        "dwc3_host.c": "host.c",
+    }
+    if filename in alts:
+        tips.append(f"{repo}/+/{parent}/{alts[filename]}")
+    # parent tree listing tip
+    tips.append(f"{repo}/+/{parent}/")
+    # unique
+    out, seen = [], set()
+    for t in tips:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
 def googlesource_tree_url(repo: str, ref: str, rel_path: str = "") -> str:
     """Build a Gitiles tree/blob URL for android.googlesource.com."""
     repo = repo.strip("/")
@@ -1551,12 +1597,21 @@ def cmd_grep(args: argparse.Namespace) -> int:
             if not args.json:
                 print(f"\n=== {url} ===")
                 print(f"FAIL http_code={r.get('http_code')}")
-                if is_googlesource_index(url) or "googlesource.com" in url:
-                    print(
-                        f"# hint: {sys.argv[0]} repos '{pattern}'  "
-                        f"or probe URL variants",
-                        file=sys.stderr,
-                    )
+                if "googlesource.com" in url:
+                    fixes = suggest_gitiles_blob_fixes(url)
+                    if fixes:
+                        print("# 404 blob — try these instead:", file=sys.stderr)
+                        for fu in fixes[:6]:
+                            print(f"#   {fu}", file=sys.stderr)
+                        print(
+                            f"# or: {sys.argv[0]} paths dwc3 --repo kernel/common",
+                            file=sys.stderr,
+                        )
+                    else:
+                        print(
+                            f"# hint: {sys.argv[0]} probe '{url}'",
+                            file=sys.stderr,
+                        )
             continue
 
         matches = grep_bytes(
@@ -1603,15 +1658,25 @@ def cmd_grep(args: argparse.Namespace) -> int:
 
     if not any_hit:
         if not args.json:
-            print(
-                "\n# No matches. Prefer:\n"
-                f"#   {sys.argv[0]} repos '{pattern}'     # googlesource repo names\n"
-                f"#   {sys.argv[0]} local '{pattern}'\n"
-                f"#   {sys.argv[0]} find '{pattern}' --remote --compact\n"
-                f"#   {sys.argv[0]} suggest '{pattern}'\n"
-                "# Do not raw-curl DevSite / dump HTML into context.",
-                file=sys.stderr,
+            looks_like_symbol = bool(
+                re.search(r"[a-zA-Z_]\w*\s+[a-zA-Z_]|struct\s+|\(\)", pattern)
             )
+            print("\n# No matches.", file=sys.stderr)
+            if looks_like_symbol:
+                print(
+                    "# Code symbol: confirm blob URL first (404 = wrong path/name).\n"
+                    f"#   {sys.argv[0]} paths dwc3 --repo kernel/common\n"
+                    f"#   {sys.argv[0]} check 'URL'\n"
+                    "# dwc3 files are core.h / core.c / gadget.c — NOT dwc3_core.h",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"#   {sys.argv[0]} paths '{pattern}'\n"
+                    f"#   {sys.argv[0]} local '{pattern}'\n"
+                    f"#   {sys.argv[0]} repos '{pattern}'  # names only",
+                    file=sys.stderr,
+                )
         return 1
     return 0
 
