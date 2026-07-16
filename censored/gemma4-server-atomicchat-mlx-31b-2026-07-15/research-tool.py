@@ -57,7 +57,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 # Defaults
 # ---------------------------------------------------------------------------
 
-VERSION = "1.3.3"
+VERSION = "1.3.4"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UA = os.environ.get("RESEARCH_UA", "Mozilla/5.0")
 DEFAULT_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "30"))
@@ -469,6 +469,48 @@ def bulletin_urls(kind: str, year_month: str) -> list[str]:
     if kind == "pixel":
         return [pixel]
     return [pixel, aosp]
+
+
+
+def autofix_url(url: str) -> tuple[str, list[str]]:
+    """
+    Deterministic URL fixes before fetch (no network).
+    Returns (url, list of fix reasons applied).
+    """
+    reasons: list[str] = []
+    u = url.strip()
+    if "/docs/security/bulletins/" in u:
+        u = u.replace("/docs/security/bulletins/", "/docs/security/bulletin/")
+        reasons.append("bulletins→bulletin (singular)")
+    # /bulletin/YYYY-MM → /bulletin/YYYY-MM-01
+    m = re.search(r"(/docs/security/bulletin)/(\d{4}-\d{2})/?$", u)
+    if m:
+        u = re.sub(
+            r"(/docs/security/bulletin)/(\d{4}-\d{2})/?$",
+            lambda mo: f"{mo.group(1)}/{mo.group(2)}-01",
+            u,
+        )
+        reasons.append("added day -01 to bulletin date")
+    if u[-1:] in ".,;)":
+        u = u.rstrip(".,;)")
+        reasons.append("strip trailing punctuation")
+    return u, reasons
+
+
+def looks_like_code_symbol(pattern: str) -> bool:
+    """True for C-like symbols; false for prose like 'dwc3 DMA vulnerability'."""
+    p = pattern.strip()
+    if re.search(r"\bstruct\s+\w+", p):
+        return True
+    if "(" in p or ")" in p:
+        return True
+    if re.search(r"[A-Za-z0-9_]+\.[A-Za-z0-9_]+", p):
+        return True
+    if re.search(r"\b(memcpy|kmalloc|copy_from_user|kfree)\b", p):
+        return True
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{2,64}", p):
+        return True
+    return False
 
 
 def resolve_variants(url: str) -> list[dict[str, str]]:
@@ -1401,9 +1443,21 @@ def cmd_check(args: argparse.Namespace) -> int:
     rows = []
     rc = 0
     for url in args.urls:
+        fixed, fixes = autofix_url(url)
+        if fixes:
+            print(f"# autofix: {url} → {fixed}  ({'; '.join(fixes)})", file=sys.stderr)
+            url = fixed
         for w in warn_url_hygiene(url):
             print(f"WARN: {w}", file=sys.stderr)
         r = http_check(url, timeout=args.timeout)
+        if not r.get("ok"):
+            # one-shot probe for known schema fixes
+            pr = probe_url(url, timeout=args.timeout, max_attempts=4)
+            if pr.get("found") and pr.get("winner"):
+                wurl = pr["winner"]["url"]
+                print(f"# probe fixed 404 → {wurl}", file=sys.stderr)
+                r = http_check(wurl, timeout=args.timeout)
+                r["url"] = wurl
         rows.append(r)
         if not r.get("ok"):
             rc = 1
@@ -1430,6 +1484,10 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     Prefer grep/repos when searching for a token.
     """
     url = args.url
+    fixed, fixes = autofix_url(url)
+    if fixes:
+        print(f"# autofix: {url} → {fixed}  ({'; '.join(fixes)})", file=sys.stderr)
+        url = fixed
     for w in warn_url_hygiene(url):
         print(f"WARN: {w}", file=sys.stderr)
     r = http_fetch(
@@ -1438,6 +1496,18 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         use_cache=not args.no_cache,
         max_age=args.cache_max_age,
     )
+    if not r.get("ok"):
+        pr = probe_url(url, timeout=args.timeout, max_attempts=4)
+        if pr.get("found") and pr.get("winner"):
+            wurl = pr["winner"]["url"]
+            print(f"# probe fixed 404 → {wurl}", file=sys.stderr)
+            url = wurl
+            r = http_fetch(
+                url,
+                timeout=args.timeout,
+                use_cache=not args.no_cache,
+                max_age=args.cache_max_age,
+            )
     if not r.get("ok"):
         print(
             f"ERROR: http_code={r.get('http_code')} url={url} "
@@ -1600,6 +1670,13 @@ def cmd_grep(args: argparse.Namespace) -> int:
         use_plain = args.plain
 
     for url in urls:
+        fixed, fixes = autofix_url(url)
+        if fixes:
+            print(
+                f"# autofix: {url} → {fixed}  ({'; '.join(fixes)})",
+                file=sys.stderr,
+            )
+            url = fixed
         for w in warn_url_hygiene(url):
             print(f"WARN: {w}", file=sys.stderr)
 
@@ -1682,6 +1759,34 @@ def cmd_grep(args: argparse.Namespace) -> int:
                 use_cache=not args.no_cache,
                 max_age=args.cache_max_age,
             )
+        # 404 → try schema probe (bulletins→bulletin, +branch→+/HEAD, etc.)
+        if not r.get("ok"):
+            pr = probe_url(url, timeout=args.timeout, max_attempts=5)
+            if pr.get("found") and pr.get("winner"):
+                wurl = pr["winner"]["url"]
+                print(f"# probe fixed 404 → {wurl}", file=sys.stderr)
+                url = wurl
+                if is_gitiles_blob_url(url) and not raw_lines:
+                    r = fetch_gitiles_raw_text(
+                        url,
+                        timeout=args.timeout,
+                        use_cache=not args.no_cache,
+                        max_age=args.cache_max_age,
+                    )
+                    if not r.get("ok"):
+                        r = http_fetch(
+                            url,
+                            timeout=args.timeout,
+                            use_cache=not args.no_cache,
+                            max_age=args.cache_max_age,
+                        )
+                else:
+                    r = http_fetch(
+                        url,
+                        timeout=args.timeout,
+                        use_cache=not args.no_cache,
+                        max_age=args.cache_max_age,
+                    )
         entry = {
             "url": url,
             "http_code": r.get("http_code"),
@@ -1698,10 +1803,10 @@ def cmd_grep(args: argparse.Namespace) -> int:
                 print(f"\n=== {url} ===")
                 print(f"FAIL http_code={r.get('http_code')}")
                 if "googlesource.com" in url:
-                    fixes = suggest_gitiles_blob_fixes(url)
-                    if fixes:
+                    blob_fixes = suggest_gitiles_blob_fixes(url)
+                    if blob_fixes:
                         print("# 404 blob — try these instead:", file=sys.stderr)
-                        for fu in fixes[:6]:
+                        for fu in blob_fixes[:6]:
                             print(f"#   {fu}", file=sys.stderr)
                         print(
                             f"# or: {sys.argv[0]} paths dwc3 --repo kernel/common",
@@ -1712,6 +1817,14 @@ def cmd_grep(args: argparse.Namespace) -> int:
                             f"# hint: {sys.argv[0]} probe '{url}'",
                             file=sys.stderr,
                         )
+                elif "/bulletin" in url:
+                    print(
+                        f"# bulletin tip: {sys.argv[0]} bulletin pixel 2026-02 --check\n"
+                        f"# or: {sys.argv[0]} cves "
+                        f"'https://source.android.com/docs/security/bulletin/"
+                        f"pixel/2026/2026-02-01'",
+                        file=sys.stderr,
+                    )
             continue
 
         is_raw_src = bool(r.get("raw_text"))
@@ -1774,11 +1887,22 @@ def cmd_grep(args: argparse.Namespace) -> int:
 
     if not any_hit:
         if not args.json:
-            looks_like_symbol = bool(
-                re.search(r"[a-zA-Z_]\w*\s+[a-zA-Z_]|struct\s+|\(\)", pattern)
-            )
             print("\n# No matches.", file=sys.stderr)
-            if looks_like_symbol:
+            # Prefer hints from last result URL
+            last_url = ""
+            for e in reversed(report):
+                last_url = str(e.get("url") or "")
+                if last_url:
+                    break
+            if last_url and "/bulletin" in last_url:
+                print(
+                    "# Security bulletin: try keywords (CVE, VPU, USB), not prose.\n"
+                    f"#   {sys.argv[0]} cves '{last_url}'\n"
+                    f"#   {sys.argv[0]} grep -i 'VPU|USB|DMA|dwc3' '{last_url}'\n"
+                    f"#   {sys.argv[0]} bulletin pixel 2026-02 --check",
+                    file=sys.stderr,
+                )
+            elif looks_like_code_symbol(pattern):
                 print(
                     "# Code symbol: confirm blob URL first (404 = wrong path/name).\n"
                     f"#   {sys.argv[0]} paths dwc3 --repo kernel/common\n"
