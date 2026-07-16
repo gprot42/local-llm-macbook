@@ -7,20 +7,20 @@ Sits between Kilo and the MLX OpenAI server:
 
 Why this exists
 ---------------
-Without a proxy, Kilo compaction turns often still ship ``tools`` +
-``tool_choice=auto``. Gemma then *explores with tools* instead of writing a
-short summary. Context never shrinks (logs: ``pruned=0``), auto-compaction
-retries thrice, then:
+1. **Thinking / empty content (critical)**
+   mlx_lm + Gemma 4 often emits all tokens in ``message.reasoning`` with
+   ``content: null``. Kilo then sees blank assistant turns, never parses
+   tool calls, and the agent "bombs out". Fix: force
+   ``chat_template_kwargs.enable_thinking=false`` and remap any leftover
+   reasoning → content (JSON + SSE).
 
-  ContextOverflowError: Compaction exhausted: context still exceeds model limits
+2. **Compaction**
+   Kilo compaction turns often still ship ``tools`` + ``tool_choice=auto``.
+   Gemma explores instead of summarizing → ContextOverflowError after 3
+   failed compactions. Fix: strip tools on summary turns; cap max_tokens.
 
-This proxy:
-
-  1. Detects compaction / summary turns and strips tools (tool_choice none).
-  2. Caps compaction ``max_tokens`` so summaries stay short.
-  3. Truncates large ``role=tool`` message bodies in the outbound prompt
-     (extra safety beyond Kilo ``tool_output`` caps).
-  4. Passes through ``/v1/*`` including streaming SSE.
+3. **Context bloat**
+   Truncate large ``role=tool`` message bodies before they hit the model.
 
 Usage:
   python3 gemma4_kilo_proxy.py --upstream http://127.0.0.1:8090 --port 8080
@@ -216,7 +216,103 @@ def _flatten_tool_calls_in_history(messages: list[dict]) -> int:
     return n
 
 
+def _disable_thinking(body: dict) -> None:
+    """Force Gemma chat template out of thinking mode (agent-safe default).
+
+    Without this, mlx_lm streams tokens into ``delta.reasoning`` and leaves
+    ``content`` empty — Kilo shows blank turns and never gets tool_calls.
+    """
+    kwargs = body.get("chat_template_kwargs")
+    if not isinstance(kwargs, dict):
+        kwargs = {}
+    else:
+        kwargs = dict(kwargs)
+    if kwargs.get("enable_thinking") is not False:
+        kwargs["enable_thinking"] = False
+        body["chat_template_kwargs"] = kwargs
+        log.info("[think] chat_template_kwargs.enable_thinking=false")
+    else:
+        body["chat_template_kwargs"] = kwargs
+    # Common client aliases (ignored by mlx if unknown; harmless)
+    body["enable_thinking"] = False
+    if isinstance(body.get("thinking"), dict):
+        body["thinking"] = {"type": "disabled"}
+    elif "thinking" not in body:
+        body["thinking"] = {"type": "disabled"}
+
+
+def _content_empty(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, list):
+        return len(value) == 0
+    return False
+
+
+def _remap_reasoning_to_content_in_message(msg: dict) -> bool:
+    """If content is empty and reasoning is set, move reasoning → content."""
+    if not isinstance(msg, dict):
+        return False
+    reasoning = msg.get("reasoning")
+    if reasoning is None:
+        reasoning = msg.get("reasoning_content")
+    if not isinstance(reasoning, str) or not reasoning:
+        return False
+    if not _content_empty(msg.get("content")):
+        return False
+    msg["content"] = reasoning
+    msg.pop("reasoning", None)
+    msg.pop("reasoning_content", None)
+    return True
+
+
+def _remap_reasoning_in_completion_payload(data: dict) -> bool:
+    changed = False
+    for choice in data.get("choices") or []:
+        if not isinstance(choice, dict):
+            continue
+        msg = choice.get("message")
+        if isinstance(msg, dict) and _remap_reasoning_to_content_in_message(msg):
+            changed = True
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            # Stream chunk shape: delta.reasoning without delta.content
+            reasoning = delta.get("reasoning")
+            if reasoning is None:
+                reasoning = delta.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning:
+                if _content_empty(delta.get("content")):
+                    delta["content"] = reasoning
+                    delta.pop("reasoning", None)
+                    delta.pop("reasoning_content", None)
+                    changed = True
+    return changed
+
+
+def _rewrite_sse_chunk(line: bytes) -> bytes:
+    """Map reasoning→content inside one SSE ``data:`` line (pass-through otherwise)."""
+    if not line.startswith(b"data:"):
+        return line
+    payload = line[5:].strip()
+    if not payload or payload == b"[DONE]":
+        return line
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return line
+    if not isinstance(data, dict):
+        return line
+    if not _remap_reasoning_in_completion_payload(data):
+        return line
+    return b"data: " + json.dumps(data, ensure_ascii=False).encode("utf-8") + b"\n"
+
+
 def _prepare_body(body: dict) -> None:
+    # Always disable thinking for Kilo — empty content breaks the agent loop.
+    _disable_thinking(body)
+
     messages = body.get("messages")
     if isinstance(messages, list):
         truncated = _truncate_tool_messages(messages)
@@ -363,14 +459,31 @@ class Handler(BaseHTTPRequestHandler):
 
             if stream or "text/event-stream" in content_type:
                 self.end_headers()
+                # Line-buffer SSE so we can remap reasoning → content per event.
+                buf = b""
                 while True:
                     chunk = resp.read(4096)
                     if not chunk:
                         break
-                    self.wfile.write(chunk)
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        out = _rewrite_sse_chunk(line + b"\n")
+                        self.wfile.write(out)
+                        self.wfile.flush()
+                if buf:
+                    self.wfile.write(_rewrite_sse_chunk(buf))
                     self.wfile.flush()
             else:
                 payload = resp.read()
+                if "application/json" in content_type:
+                    try:
+                        data = json.loads(payload.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        data = None
+                    if isinstance(data, dict) and _remap_reasoning_in_completion_payload(data):
+                        log.info("[think] remapped reasoning → content in non-stream response")
+                        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
@@ -405,7 +518,8 @@ def main(argv: list[str] | None = None) -> int:
     Handler.state = state
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     log.info(
-        "gemma4 kilo proxy on http://%s:%d → %s (compaction tool-strip ON)",
+        "gemma4 kilo proxy on http://%s:%d → %s "
+        "(thinking OFF + compaction tool-strip ON)",
         args.host,
         args.port,
         state.upstream,

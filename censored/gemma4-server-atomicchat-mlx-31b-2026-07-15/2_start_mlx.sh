@@ -419,7 +419,7 @@ else
     echo "  READY — mlx_lm.server (no MTP)"
 fi
 if [ "$USE_PROXY" = true ]; then
-    echo "  Harness:    gemma4_kilo_proxy (compaction tool-strip ON)"
+    echo "  Harness:    gemma4_kilo_proxy (thinking OFF + compaction tool-strip)"
     echo "  Path:       :$PORT proxy → :$BIND_PORT engine"
 else
     echo "  Harness:    none (raw engine — compaction may fail in long Kilo sessions)"

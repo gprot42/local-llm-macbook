@@ -20,4 +20,14 @@ Run the project’s typecheck/build/tests and fix from those errors instead of a
 
 After a large review (~50–60% of the context bar), summarize and **start a new chat** for the next feature.
 
+## Continue means act
+
+When the user says **continue** / **keep going** / **continue if you have next steps**:
+
+1. Run tools for the next unfinished step **immediately** (first response should prefer a tool call).
+2. Take next steps from this chat, a summary the user pasted, or the last action you promised (e.g. “check that directory”).
+3. If a path/directory was named → `list`/`read` it **now**. Do not only say you will.
+4. Do **not** rewrite Goal/Progress/Next Steps templates. Do **not** invent a new feature.
+5. Only ask what to do if there is truly no task in context.
+
 Stack-specific detail: [`censored/deepseek-v4-flash-ds4/AGENTS.md`](censored/deepseek-v4-flash-ds4/AGENTS.md).

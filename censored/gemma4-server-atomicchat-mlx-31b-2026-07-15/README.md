@@ -143,7 +143,7 @@ Cause: auto-compaction still sent `tools`, so Gemma kept exploring instead of wr
 
 | Layer | What it does |
 |-------|----------------|
-| `gemma4_kilo_proxy.py` (default) | Detects compaction turns → `tool_choice=none`, strips tools, caps summary `max_tokens`, truncates large tool results |
+| `gemma4_kilo_proxy.py` (default) | **Thinking OFF** (`chat_template_kwargs.enable_thinking=false`) so Kilo gets `content` not empty/`reasoning`; compaction turns strip tools; remap leftover reasoning→content on SSE; truncate large tool results |
 | `kilo.json` `compaction.reserved` | Leaves ~12k tokens free so compact runs before the window is full |
 | `agent.compaction` prompt | Forces ≤~40 line plain text — no Goal/Progress spam |
 | Tighter `tool_output` | Smaller dumps so prune/truncation has less to keep |
@@ -156,6 +156,8 @@ curl -s http://127.0.0.1:8080/healthz
 ```
 
 Reload Kilo after changing `kilo.json`. After a failed overflow session, **start a new chat** (the dead session cannot recover).
+
+**Continue must act:** prompts now require that “continue” / “continue if you have next steps” runs tools for the next unfinished step (list/read the named path) instead of rewriting Goal/Progress templates. If an old session only re-summarized, start a **new chat** with a short handoff: goal + next path to open.
 
 > For heavier agent tuning (fuzzy edits, Heretic model, Harmony bias), use
 > `gemma4-server-heretic-31b-mlx`. For coding speed on Qwen, use `qwen3-6-27b-coder-mtplx`.
