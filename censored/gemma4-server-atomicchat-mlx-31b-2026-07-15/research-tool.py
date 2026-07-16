@@ -175,9 +175,18 @@ TOPIC_CANDIDATES: dict[str, list[str]] = {
         "https://grapheneos.org/releases",
         "https://developers.google.com/android/images",
         "https://grapheneos.org/install/cli",
-        "https://android.googlesource.com/device/google/gs-common/",
+        "https://android.googlesource.com/device/google/shusky/",
+        "https://android.googlesource.com/device/google/shusky-kernels/6.1/",
+        "https://android.googlesource.com/kernel/devices/google/shusky/",
         "https://android.googlesource.com/kernel/gs/",
         "https://android.googlesource.com/kernel/common/",
+    ],
+    "shusky": [
+        "https://android.googlesource.com/device/google/shusky/",
+        "https://android.googlesource.com/device/google/shusky-kernel/",
+        "https://android.googlesource.com/device/google/shusky-kernels/6.1/",
+        "https://android.googlesource.com/kernel/devices/google/shusky/",
+        "https://source.android.com/docs/setup/reference/build-numbers",
     ],
     "pixel8": [
         "https://source.android.com/docs/setup/reference/build-numbers",
@@ -1873,7 +1882,8 @@ Quick recipes (local LLM / agent):
   ./research-tool.py grep CVE-2026 URL --json
 
 Do NOT use Kilo webfetch on source.android.com / developer.android.com.
-After one failed host pattern, stop spraying URLs — use resolve/probe/known.
+Do NOT use raw curl|grep for research — use research-tool (snippets / repos).
+After one failed host pattern, stop spraying URLs — use resolve/probe/known/repos.
 """.strip()
     )
     return 0
