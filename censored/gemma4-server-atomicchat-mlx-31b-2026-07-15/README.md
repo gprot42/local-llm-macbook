@@ -152,7 +152,13 @@ Cause: auto-compaction still sent `tools`, so Gemma kept exploring instead of wr
 ./2_start_mlx.sh                 # proxy :8080 → engine :8090 (default)
 ./2_start_mlx.sh --no-proxy      # raw mlx on :8080 (curl smoke only)
 ./2_start_mlx.sh restart         # clear both ports, then start
+./2_start_mlx.sh --debug         # proxy DEBUG + harness traces
+./2_start_mlx.sh --no-harness-log
 curl -s http://127.0.0.1:8080/healthz
+# tail harness traces (no message bodies):
+#   [harness] req compaction=False tools_in=12 tool_choice_in=auto ...
+#   [harness] resp stream finish='tool_calls' tool_calls=[bash,read] ...
+tail -f /tmp/gemma4_kilo_proxy.log   # if started via nohup; else terminal stdout
 ```
 
 Reload Kilo after changing `kilo.json`. After a failed overflow session, **start a new chat** (the dead session cannot recover).

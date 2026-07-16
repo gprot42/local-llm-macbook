@@ -40,6 +40,9 @@ from urllib.parse import urlparse
 
 log = logging.getLogger("gemma4_kilo_proxy")
 
+# Targeted harness traces (no message bodies). Disable with --no-harness-log.
+HARNESS_LOG = True
+
 # Keep compaction summaries short — long Goal/Progress dumps re-inflate context.
 _COMPACTION_MAX_TOKENS = 1024
 _COMPACTION_MAX_TOKENS_CEILING = 2048
@@ -343,7 +346,59 @@ def _nudge_agent_multi_step(messages: list[dict]) -> None:
     messages.insert(0, {"role": "system", "content": _AGENT_CONTINUE_NUDGE.strip()})
 
 
-def _prepare_body(body: dict) -> None:
+def _tool_schema_names(body: dict) -> list[str]:
+    names: list[str] = []
+    for t in body.get("tools") or []:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function") if isinstance(t.get("function"), dict) else t
+        if isinstance(fn, dict) and fn.get("name"):
+            names.append(str(fn["name"]))
+    return names
+
+
+def _tool_choice_repr(tool_choice: Any) -> str:
+    if tool_choice is None:
+        return "unset"
+    if isinstance(tool_choice, str):
+        return tool_choice
+    if isinstance(tool_choice, dict):
+        return json.dumps(tool_choice, separators=(",", ":"), ensure_ascii=False)[:80]
+    return type(tool_choice).__name__
+
+
+def _message_role_counts(messages: Any) -> str:
+    if not isinstance(messages, list):
+        return "msgs=0"
+    counts: dict[str, int] = {}
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "?")
+        counts[role] = counts.get(role, 0) + 1
+    if not counts:
+        return "msgs=0"
+    parts = [f"{k}:{v}" for k, v in sorted(counts.items())]
+    return "msgs=" + ",".join(parts)
+
+
+def _harness_log(msg: str, *args: Any) -> None:
+    if HARNESS_LOG:
+        log.info(msg, *args)
+
+
+def _prepare_body(body: dict) -> dict[str, Any]:
+    """Mutate body for agent safety. Returns a small trace dict (no bodies)."""
+    trace: dict[str, Any] = {
+        "compaction": False,
+        "tools_in": len(body.get("tools") or []) if isinstance(body.get("tools"), list) else 0,
+        "tool_names_in": _tool_schema_names(body),
+        "tool_choice_in": _tool_choice_repr(body.get("tool_choice")),
+        "truncated_tool_msgs": 0,
+        "nudged_multi_step": False,
+        "thinking_off": True,
+    }
+
     # Always disable thinking for Kilo — empty content breaks the agent loop.
     _disable_thinking(body)
 
@@ -351,6 +406,7 @@ def _prepare_body(body: dict) -> None:
     if isinstance(messages, list):
         truncated = _truncate_tool_messages(messages)
         if truncated:
+            trace["truncated_tool_msgs"] = truncated
             log.info("[truncate] shortened %d tool message(s)", truncated)
 
     if _looks_like_compaction(body):
@@ -362,15 +418,17 @@ def _prepare_body(body: dict) -> None:
             if flat:
                 log.info("[compaction] flattened tool_calls on %d message(s)", flat)
         _cap_compaction_tokens(body)
-        # Lower temp for denser summaries
         body.setdefault("temperature", 0.2)
+        trace["compaction"] = True
+        trace["tools_out"] = 0
+        trace["tool_choice_out"] = "none"
         log.info("[mode] compaction → tools stripped, short max_tokens")
-        return
+        return trace
 
     # Agentic turns: keep tools; nudge multi-step completion; temp floor.
     if _has_tools(body) and isinstance(messages, list):
         _nudge_agent_multi_step(messages)
-        log.info("[agent] multi-step continue nudge applied")
+        trace["nudged_multi_step"] = True
 
     temp = body.get("temperature")
     try:
@@ -380,6 +438,154 @@ def _prepare_body(body: dict) -> None:
     if t is not None and t < 0.2 and body.get("tools"):
         body["temperature"] = 0.35
         log.info("[temp] raised agentic temperature %.2f → 0.35", t)
+
+    trace["tools_out"] = len(body.get("tools") or []) if isinstance(body.get("tools"), list) else 0
+    trace["tool_choice_out"] = _tool_choice_repr(body.get("tool_choice"))
+    return trace
+
+
+def _log_request_harness(body: dict, trace: dict[str, Any], *, stream: bool) -> None:
+    mt = body.get("max_tokens")
+    if mt is None:
+        mt = body.get("max_completion_tokens")
+    names = trace.get("tool_names_in") or []
+    names_s = ",".join(names[:12])
+    if len(names) > 12:
+        names_s += f",+{len(names) - 12}"
+    _harness_log(
+        "[harness] req compaction=%s stream=%s %s tools_in=%s tools_out=%s "
+        "tool_choice_in=%s tool_choice_out=%s tool_names=[%s] max_tokens=%s "
+        "multi_step_nudge=%s truncate_tools=%s model=%s",
+        trace.get("compaction"),
+        stream,
+        _message_role_counts(body.get("messages")),
+        trace.get("tools_in"),
+        trace.get("tools_out"),
+        trace.get("tool_choice_in"),
+        trace.get("tool_choice_out"),
+        names_s,
+        mt,
+        trace.get("nudged_multi_step"),
+        trace.get("truncated_tool_msgs"),
+        body.get("model"),
+    )
+
+
+def _tool_call_names_from_message(msg: dict) -> list[str]:
+    names: list[str] = []
+    for tc in msg.get("tool_calls") or []:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        name = fn.get("name") if isinstance(fn, dict) else None
+        if name:
+            names.append(str(name))
+        elif tc.get("name"):
+            names.append(str(tc["name"]))
+    return names
+
+
+def _summarize_completion_json(data: dict) -> str:
+    """One-line response summary; no content text."""
+    finish = None
+    tool_names: list[str] = []
+    content_len = 0
+    has_reasoning = False
+    for choice in data.get("choices") or []:
+        if not isinstance(choice, dict):
+            continue
+        if choice.get("finish_reason") is not None:
+            finish = choice.get("finish_reason")
+        msg = choice.get("message")
+        if isinstance(msg, dict):
+            tool_names.extend(_tool_call_names_from_message(msg))
+            c = msg.get("content")
+            if isinstance(c, str):
+                content_len += len(c)
+            if msg.get("reasoning") or msg.get("reasoning_content"):
+                has_reasoning = True
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            tool_names.extend(_tool_call_names_from_message(delta))
+            # partial tool call deltas (name in function)
+            for tc in delta.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                if isinstance(fn, dict) and fn.get("name"):
+                    n = str(fn["name"])
+                    if n not in tool_names:
+                        tool_names.append(n)
+            c = delta.get("content")
+            if isinstance(c, str):
+                content_len += len(c)
+            if delta.get("reasoning") or delta.get("reasoning_content"):
+                has_reasoning = True
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    return (
+        f"finish={finish!r} tool_calls=[{','.join(tool_names)}] "
+        f"content_chars={content_len} has_reasoning_field={has_reasoning} "
+        f"prompt_tokens={usage.get('prompt_tokens')} "
+        f"completion_tokens={usage.get('completion_tokens')}"
+    )
+
+
+class StreamHarnessStats:
+    """Accumulate finish_reason / tool names from SSE without storing content."""
+
+    def __init__(self) -> None:
+        self.finish: Any = None
+        self.tool_names: list[str] = []
+        self.content_chars = 0
+        self.reasoning_chars = 0
+        self.chunks = 0
+        self.remap_events = 0
+
+    def observe_line(self, line: bytes) -> None:
+        if not line.startswith(b"data:"):
+            return
+        payload = line[5:].strip()
+        if not payload or payload == b"[DONE]":
+            return
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        self.chunks += 1
+        for choice in data.get("choices") or []:
+            if not isinstance(choice, dict):
+                continue
+            if choice.get("finish_reason") is not None:
+                self.finish = choice.get("finish_reason")
+            delta = choice.get("delta")
+            if not isinstance(delta, dict):
+                continue
+            for name in _tool_call_names_from_message(delta):
+                if name not in self.tool_names:
+                    self.tool_names.append(name)
+            for tc in delta.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                if isinstance(fn, dict) and fn.get("name"):
+                    n = str(fn["name"])
+                    if n not in self.tool_names:
+                        self.tool_names.append(n)
+            c = delta.get("content")
+            if isinstance(c, str):
+                self.content_chars += len(c)
+            r = delta.get("reasoning") or delta.get("reasoning_content")
+            if isinstance(r, str):
+                self.reasoning_chars += len(r)
+
+    def summary(self) -> str:
+        return (
+            f"finish={self.finish!r} tool_calls=[{','.join(self.tool_names)}] "
+            f"content_chars={self.content_chars} reasoning_chars={self.reasoning_chars} "
+            f"sse_chunks={self.chunks}"
+        )
 
 
 class ProxyState:
@@ -458,6 +664,7 @@ class Handler(BaseHTTPRequestHandler):
 
         path = self.path
         stream = False
+        is_chat = False
         if body and "application/json" in (self.headers.get("Content-Type") or ""):
             try:
                 data = json.loads(body.decode("utf-8"))
@@ -468,7 +675,9 @@ class Handler(BaseHTTPRequestHandler):
                 if path.rstrip("/").endswith("/chat/completions") or path.rstrip(
                     "/"
                 ).endswith("/messages"):
-                    _prepare_body(data)
+                    is_chat = True
+                    trace = _prepare_body(data)
+                    _log_request_harness(data, trace, stream=stream)
                 body = json.dumps(data, ensure_ascii=False).encode("utf-8")
                 headers["Content-Type"] = "application/json"
 
@@ -480,8 +689,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             conn.request(self.command, path, body=body, headers=headers)
             resp = conn.getresponse()
+            # Header names are case-insensitive; mlx may send Content-type vs Content-Type.
             resp_headers = {k: v for k, v in resp.getheaders()}
-            content_type = resp_headers.get("Content-Type", "")
+            resp_headers_l = {k.lower(): v for k, v in resp_headers.items()}
+            content_type = (resp_headers_l.get("content-type") or "").lower()
 
             self.send_response(resp.status)
             for k, v in resp_headers.items():
@@ -499,6 +710,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 # Line-buffer SSE so we can remap reasoning → content per event.
                 buf = b""
+                stats = StreamHarnessStats() if is_chat else None
                 while True:
                     chunk = resp.read(4096)
                     if not chunk:
@@ -506,27 +718,45 @@ class Handler(BaseHTTPRequestHandler):
                     buf += chunk
                     while b"\n" in buf:
                         line, buf = buf.split(b"\n", 1)
-                        out = _rewrite_sse_chunk(line + b"\n")
+                        raw_line = line + b"\n"
+                        out = _rewrite_sse_chunk(raw_line)
+                        if stats is not None:
+                            stats.observe_line(out)
                         self.wfile.write(out)
                         self.wfile.flush()
                 if buf:
-                    self.wfile.write(_rewrite_sse_chunk(buf))
+                    out = _rewrite_sse_chunk(buf)
+                    if stats is not None:
+                        stats.observe_line(out)
+                    self.wfile.write(out)
                     self.wfile.flush()
+                if stats is not None:
+                    _harness_log("[harness] resp stream status=%s %s", resp.status, stats.summary())
             else:
                 payload = resp.read()
-                if "application/json" in content_type:
+                if "application/json" in content_type or is_chat:
                     try:
                         data = json.loads(payload.decode("utf-8"))
                     except (UnicodeDecodeError, json.JSONDecodeError):
                         data = None
-                    if isinstance(data, dict) and _remap_reasoning_in_completion_payload(data):
-                        log.info("[think] remapped reasoning → content in non-stream response")
-                        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                    if isinstance(data, dict):
+                        if _remap_reasoning_in_completion_payload(data):
+                            log.info(
+                                "[think] remapped reasoning → content in non-stream response"
+                            )
+                            payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                        if is_chat:
+                            _harness_log(
+                                "[harness] resp json status=%s %s",
+                                resp.status,
+                                _summarize_completion_json(data),
+                            )
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
         except Exception as exc:
             log.exception("upstream error: %s", exc)
+            _harness_log("[harness] resp error %s", exc)
             try:
                 self._send_json(502, {"error": {"message": str(exc), "type": "proxy_error"}})
             except Exception:
@@ -536,6 +766,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv: list[str] | None = None) -> int:
+    global HARNESS_LOG
     p = argparse.ArgumentParser(description="Gemma4 AtomicChat ↔ Kilo harness proxy")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8080)
@@ -544,8 +775,25 @@ def main(argv: list[str] | None = None) -> int:
         default="http://127.0.0.1:8090",
         help="mlx_lm/mlx_vlm base URL (no trailing /v1)",
     )
-    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="DEBUG logging (still no full message bodies in harness traces)",
+    )
+    p.add_argument(
+        "--harness-log",
+        action="store_true",
+        default=True,
+        help="One-line req/resp harness traces (default: on)",
+    )
+    p.add_argument(
+        "--no-harness-log",
+        action="store_true",
+        help="Disable [harness] one-line traces",
+    )
     args = p.parse_args(argv)
+    HARNESS_LOG = not args.no_harness_log
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -557,10 +805,11 @@ def main(argv: list[str] | None = None) -> int:
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     log.info(
         "gemma4 kilo proxy on http://%s:%d → %s "
-        "(thinking OFF + compaction tool-strip ON)",
+        "(thinking OFF + compaction tool-strip ON; harness_log=%s)",
         args.host,
         args.port,
         state.upstream,
+        HARNESS_LOG,
     )
     try:
         server.serve_forever()

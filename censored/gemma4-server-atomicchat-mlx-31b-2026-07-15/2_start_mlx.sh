@@ -50,6 +50,7 @@ VERIFY_MTP=true
 # Default on: compaction tool-strip + tool-result truncation for Kilo sessions.
 USE_PROXY=true
 PROXY_DEBUG=false
+PROXY_HARNESS_LOG=true
 
 stop_server_on_port() {
     local port="$1"
@@ -87,7 +88,8 @@ for arg in "$@"; do
         echo "  --verify-mtp         Run MTP verify after start (default when MTP on)"
         echo "  --proxy              Kilo harness proxy on public port (default: on)"
         echo "  --no-proxy           Raw mlx on public port (no compaction tool-strip)"
-        echo "  --debug              Verbose proxy logging"
+        echo "  --debug              Proxy DEBUG logging (still no full message bodies)"
+        echo "  --no-harness-log     Disable one-line [harness] req/resp traces (default: on)"
         echo "  --port PORT          Public API port (default: 8080)"
         echo "  --engine-port PORT   Upstream mlx port when proxy on (default: 8090)"
         echo "  --host HOST          Host to bind (default: 127.0.0.1)"
@@ -115,6 +117,7 @@ while [[ $i -lt ${#args[@]} ]]; do
         --proxy) USE_PROXY=true; ((i+=1)) ;;
         --no-proxy) USE_PROXY=false; ((i+=1)) ;;
         --debug) PROXY_DEBUG=true; ((i+=1)) ;;
+        --no-harness-log) PROXY_HARNESS_LOG=false; ((i+=1)) ;;
         --port) PORT="${args[$((i+1))]:-$PORT}"; ((i+=2)) ;;
         --engine-port) ENGINE_PORT="${args[$((i+1))]:-$ENGINE_PORT}"; ((i+=2)) ;;
         --host) HOST="${args[$((i+1))]:-$HOST}"; ((i+=2)) ;;
@@ -364,7 +367,10 @@ if [ "$USE_PROXY" = true ]; then
     if [ "$PROXY_DEBUG" = true ]; then
         PROXY_ARGS+=(--verbose)
     fi
-    echo "→ Launching gemma4_kilo_proxy on :$PORT → engine :$BIND_PORT"
+    if [ "$PROXY_HARNESS_LOG" = false ]; then
+        PROXY_ARGS+=(--no-harness-log)
+    fi
+    echo "→ Launching gemma4_kilo_proxy on :$PORT → engine :$BIND_PORT (harness_log=$PROXY_HARNESS_LOG)"
     python3 "$SCRIPT_DIR/gemma4_kilo_proxy.py" "${PROXY_ARGS[@]}" &
     PROXY_PID=$!
     echo "→ Waiting for proxy on :$PORT ..."
