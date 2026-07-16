@@ -2594,7 +2594,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add_sub("grep", help="Fetch URL(s) and search (snippets; no HTML dumps)")
     sp.add_argument("pattern", help="regex pattern")
     sp.add_argument("urls", nargs="+", help="one or more URLs")
-    sp.add_argument("--case-sensitive", action="store_true")
+    # Default is case-insensitive; -i accepted for grep/curl muscle memory (no-op).
+    sp.add_argument(
+        "-i",
+        "--ignore-case",
+        action="store_true",
+        default=True,
+        help="case-insensitive match (default; -i is accepted as a no-op)",
+    )
+    sp.add_argument(
+        "--case-sensitive",
+        action="store_true",
+        help="disable case-insensitive matching",
+    )
     sp.add_argument("-C", "--context", type=int, default=1)
     sp.add_argument("--max-matches", type=int, default=DEFAULT_GREP_MATCHES)
     sp.add_argument(
