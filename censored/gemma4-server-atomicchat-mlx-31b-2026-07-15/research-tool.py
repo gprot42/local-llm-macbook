@@ -57,7 +57,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 # Defaults
 # ---------------------------------------------------------------------------
 
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UA = os.environ.get("RESEARCH_UA", "Mozilla/5.0")
 DEFAULT_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "30"))
@@ -822,11 +822,13 @@ def grep_bytes(
     plain: bool = False,
     snippet_width: int = DEFAULT_SNIPPET,
     auto_html: bool = True,
+    fixed_string: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Grep body for pattern. Agent-friendly defaults:
     - HTML auto-detected → strip tags (plain) + soft-break minified pages
     - Long lines → short snippets around the match (not 50KB lines)
+    - Invalid regex (e.g. memcpy() falls back to literal match
     """
     try:
         text = body.decode("utf-8", errors="replace")
@@ -842,10 +844,36 @@ def grep_bytes(
         text = soft_break_minified(text)
 
     flags = re.IGNORECASE if ignore_case else 0
-    try:
-        cre = re.compile(pattern, flags)
-    except re.error as e:
-        return [{"error": f"bad regex: {e}"}]
+    fixed = bool(fixed_string)
+    pattern_note = ""
+    if fixed:
+        cre = re.compile(re.escape(pattern), flags)
+        pattern_note = "fixed-string (-F)"
+    else:
+        try:
+            cre = re.compile(pattern, flags)
+        except re.error as e:
+            # Agents often pass C-like literals: memcpy(  copy_from_user(
+            # Auto-escape rather than fail the whole (already-fetched) page.
+            cre = re.compile(re.escape(pattern), flags)
+            pattern_note = f"auto-literal (invalid regex: {e})"
+            fixed = True
+
+    def _annotate(ms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if pattern_note and ms:
+            ms[0]["pattern_note"] = pattern_note
+        elif pattern_note and not ms:
+            ms.append(
+                {
+                    "line": 0,
+                    "match": "",
+                    "snippet": "",
+                    "context": [],
+                    "pattern_note": pattern_note,
+                    "empty": True,
+                }
+            )
+        return ms
 
     lines = text.splitlines()
     # If still a tiny number of huge lines, force character-window search
@@ -863,7 +891,7 @@ def grep_bytes(
             )
             if len(matches) >= max_matches:
                 break
-        return matches
+        return _annotate(matches)
 
     matches = []
     for i, line in enumerate(lines):
@@ -881,7 +909,7 @@ def grep_bytes(
                     }
                 )
                 if len(matches) >= max_matches:
-                    return matches
+                    return _annotate(matches)
         else:
             start = max(0, i - context)
             end = min(len(lines), i + context + 1)
@@ -901,7 +929,7 @@ def grep_bytes(
             )
             if len(matches) >= max_matches:
                 break
-    return matches
+    return _annotate(matches)
 
 
 REPO_ITEM_RE = re.compile(
@@ -1040,6 +1068,56 @@ def googlesource_tree_url(repo: str, ref: str, rel_path: str = "") -> str:
     if re.search(r"\.[a-zA-Z0-9]{1,8}$", rel_path):
         return f"{base}/{rel_path}"
     return f"{base}/{rel_path}/"
+
+
+
+def is_gitiles_blob_url(url: str) -> bool:
+    """True for …/+/REF/path/to/file.c style (not tree ending in /)."""
+    if "googlesource.com" not in url or "/+/" not in url:
+        return False
+    path = urlparse(url).path
+    if path.endswith("/"):
+        return False
+    # has a filename with extension
+    return bool(re.search(r"/[^/]+\.[a-zA-Z0-9]{1,10}$", path))
+
+
+def fetch_gitiles_raw_text(
+    url: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    use_cache: bool = True,
+    max_age: int = 86400,
+) -> dict[str, Any]:
+    """
+    Fetch a Gitiles blob as plain source via ?format=TEXT (base64).
+    Far better for code grep than HTML syntax-highlighted pages.
+    """
+    import base64
+
+    base = url.split("?", 1)[0]
+    jurl = base + "?format=TEXT"
+    r = http_fetch(jurl, timeout=timeout, use_cache=use_cache, max_age=max_age)
+    if not r.get("ok"):
+        return r
+    try:
+        raw = base64.b64decode(r["body"], validate=False)
+    except Exception as e:
+        return {
+            "ok": False,
+            "http_code": r.get("http_code"),
+            "error": f"base64 decode failed: {e}",
+            "url": jurl,
+            "body": b"",
+        }
+    return {
+        "ok": True,
+        "http_code": r.get("http_code"),
+        "url_effective": jurl,
+        "body": raw,
+        "from_cache": r.get("from_cache"),
+        "url": url,
+        "raw_text": True,
+    }
 
 
 def expand_path_queries(query: str) -> list[str]:
@@ -1577,18 +1655,40 @@ def cmd_grep(args: argparse.Namespace) -> int:
                         print(f"    {h['description'][:120]}")
             continue
 
-        r = http_fetch(
-            url,
-            timeout=args.timeout,
-            use_cache=not args.no_cache,
-            max_age=args.cache_max_age,
-        )
+        # Prefer Gitiles raw source for .c/.h blobs (HTML splits "memcpy(" across tags)
+        if (
+            is_gitiles_blob_url(url)
+            and not getattr(args, "force_html", False)
+            and not getattr(args, "raw_lines", False)
+        ):
+            r = fetch_gitiles_raw_text(
+                url,
+                timeout=args.timeout,
+                use_cache=not args.no_cache,
+                max_age=args.cache_max_age,
+            )
+            # fall back to HTML page if TEXT fails
+            if not r.get("ok"):
+                r = http_fetch(
+                    url,
+                    timeout=args.timeout,
+                    use_cache=not args.no_cache,
+                    max_age=args.cache_max_age,
+                )
+        else:
+            r = http_fetch(
+                url,
+                timeout=args.timeout,
+                use_cache=not args.no_cache,
+                max_age=args.cache_max_age,
+            )
         entry = {
             "url": url,
             "http_code": r.get("http_code"),
             "url_effective": r.get("url_effective"),
             "ok": r.get("ok"),
             "from_cache": r.get("from_cache"),
+            "raw_text": r.get("raw_text", False),
             "matches": [],
         }
         if not r.get("ok"):
@@ -1614,30 +1714,46 @@ def cmd_grep(args: argparse.Namespace) -> int:
                         )
             continue
 
+        is_raw_src = bool(r.get("raw_text"))
         matches = grep_bytes(
             r["body"],
             pattern,
             context=args.context,
             max_matches=args.max_matches,
             ignore_case=not args.case_sensitive,
-            plain=use_plain and not raw_lines,
+            plain=False if is_raw_src else (use_plain and not raw_lines),
             snippet_width=snippet_w,
-            auto_html=not raw_lines,
+            auto_html=False if is_raw_src else (not raw_lines),
+            fixed_string=getattr(args, "fixed", False),
         )
+        # Drop empty annotation-only rows from count
+        real_matches = [m for m in matches if not m.get("empty") and "error" not in m]
         entry["matches"] = matches
-        entry["match_count"] = len(matches)
-        if matches:
+        entry["match_count"] = len(real_matches)
+        if real_matches:
             any_hit = True
         report.append(entry)
 
         if not args.json:
+            note = ""
+            for m in matches:
+                if m.get("pattern_note"):
+                    note = m["pattern_note"]
+                    break
+            mode = "raw-src" if is_raw_src else ("raw" if raw_lines else "snippet")
+            if note:
+                mode = f"{mode}+{note}"
             print(
                 f"\n=== {url}  http={r.get('http_code')}  "
-                f"matches={len(matches)}  mode={'raw' if raw_lines else 'snippet'} ==="
+                f"matches={len(real_matches)}  mode={mode} ==="
             )
-            if not matches:
+            if note:
+                print(f"# pattern: {note}", file=sys.stderr)
+            if not real_matches:
                 print("(no matches)")
             for m in matches:
+                if m.get("empty"):
+                    continue
                 if "error" in m:
                     print(f"ERROR: {m['error']}")
                     continue
@@ -2501,6 +2617,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-html",
         action="store_true",
         help="do not switch googlesource / to repos mode",
+    )
+    sp.add_argument(
+        "-F",
+        "--fixed",
+        action="store_true",
+        help="fixed-string match (escape regex metacharacters; good for memcpy()",
     )
     add_cache_flags(sp)
     sp.set_defaults(func=cmd_grep)
