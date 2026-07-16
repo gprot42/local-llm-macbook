@@ -1046,8 +1046,9 @@ def list_gitiles_dir(
     max_age: int = 86400,
 ) -> dict[str, Any]:
     """GET ?format=JSON for a tree URL; return names/types."""
-    sep = "&" if "?" in url else "?"
-    jurl = f"{url.rstrip('/')}{sep}format=JSON"
+    # Gitiles wants a trailing slash on tree paths before ?format=JSON
+    base = url.split("?", 1)[0].rstrip("/") + "/"
+    jurl = f"{base}?format=JSON"
     r = http_fetch(jurl, timeout=timeout, use_cache=use_cache, max_age=max_age)
     if not r.get("ok"):
         return {"ok": False, "http_code": r.get("http_code"), "entries": [], "url": jurl}
