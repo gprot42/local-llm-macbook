@@ -328,7 +328,8 @@ def _rewrite_sse_chunk(line: bytes) -> bytes:
 _AGENT_CONTINUE_NUDGE = (
     "\n\n[Harness] Multi-step tasks: keep using tools until every requested step is done. "
     "Do not stop after 1 of N. Prefer tool_calls over plans/status when work remains. "
-    "Do not emit Goal/Progress/Next Steps templates."
+    "Never write 'Executing…' / 'I will probe…' / 'Next I will…' without emitting tool_calls "
+    "in the SAME turn. Do not emit Goal/Progress/Next Steps templates."
 )
 
 _EMPTY_TOOL_NUDGE = (
@@ -338,6 +339,34 @@ _EMPTY_TOOL_NUDGE = (
     "on a real project path. Prefer paths already in this chat or under the workspace root. "
     "Do not curl|grep remote HTML unless the user only asked for web docs. "
     "If a path FileNotFound, list its parent directory next — do not invent a new research plan."
+)
+
+_FAKE_ACTION_NUDGE = (
+    "\n\n[Harness] FAKE ACTION: the last assistant message claimed to run a tool "
+    "('Executing…', 'I will probe/check/fetch…') but there were NO tool_calls. "
+    "Your next message MUST include tool_calls only — run the real command now "
+    "(prefer ./research-tool.py check|grep|repos|text, not raw curl or HTML fetch). "
+    "No plans, no 'Executing…' prose without tools."
+)
+
+_HTML_DUMP_NUDGE = (
+    "\n\n[Harness] HTML DUMP: the latest tool result looks like raw DevSite/HTML chrome "
+    "(nav menus, not page facts). Do NOT plan further. Next tool MUST be "
+    "./research-tool.py grep PATTERN URL  OR  ./research-tool.py text URL  OR  "
+    "./research-tool.py repos PATTERN — never dump full HTML via fetch/curl."
+)
+
+# Prose that pretends a tool ran / will run without tool_calls
+_FAKE_ACTION_RE = re.compile(
+    r"(?is)"
+    r"(?:^|\n)\s*(?:executing|running|probing|fetching)\b"
+    r"|\bi(?:'| a)?m\s+(?:going\s+to|about\s+to)\s+"
+    r"|\bi(?:'| wi)?ll\s+(?:start|probe|check|fetch|run|search|use|look|verify)\b"
+    r"|\blet\s+me\s+(?:probe|check|fetch|run|search|verify|start)\b"
+    r"|\bnext[,:]?\s+i\s+will\b"
+    r"|\bi\s+will\s+(?:start|probe|check|fetch|run|search)\b"
+    r"|\bupdated\s+plan\b.*\bexecution\b"
+    r"|\bexecution:\s*probing\b"
 )
 
 _EMPTY_TOOL_EXACT = frozenset(
@@ -357,6 +386,27 @@ _EMPTY_TOOL_EXACT = frozenset(
 )
 
 
+def _looks_like_html_chrome_dump(text: str) -> bool:
+    """True when a tool result is mostly DevSite/nav HTML, not useful facts."""
+    t = text or ""
+    if len(t) < 2500:
+        return False
+    low = t.lower()
+    markers = (
+        "devsite-nav",
+        "<!doctype html",
+        "gc-analytics-event",
+        "responsive tab:",
+        "devsite-footer",
+        "skip to main content",
+        'class="devsite-nav-item"',
+    )
+    hits = sum(1 for m in markers if m in low)
+    # High tag density also counts
+    taggish = low.count("</li>") + low.count("</a>") + low.count("<span")
+    return hits >= 2 or (hits >= 1 and taggish >= 40 and len(t) > 8000)
+
+
 def _is_empty_tool_content(text: str) -> bool:
     t = (text or "").strip()
     if not t:
@@ -374,6 +424,45 @@ def _is_empty_tool_content(text: str) -> bool:
     # Whitespace / punctuation only
     if not any(ch.isalnum() for ch in t):
         return True
+    # Raw HTML chrome dumps are "useless" for agent planning (treat like empty)
+    if _looks_like_html_chrome_dump(t):
+        return True
+    return False
+
+
+def _recent_tool_was_html_dump(messages: list[dict] | None) -> bool:
+    if not messages:
+        return False
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role in ("tool", "function"):
+            return _looks_like_html_chrome_dump(_message_text(msg))
+        if role in ("assistant", "user"):
+            break
+    return False
+
+
+def _assistant_faked_action(messages: list[dict] | None) -> bool:
+    """Last assistant turn claims to run tools but emitted no tool_calls."""
+    if not messages:
+        return False
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role in ("tool", "function"):
+            return False
+        if role == "assistant":
+            if msg.get("tool_calls"):
+                return False
+            text = _message_text(msg)
+            if len(text.strip()) < 24:
+                return False
+            return bool(_FAKE_ACTION_RE.search(text))
+        if role == "user":
+            return False
     return False
 
 
@@ -446,6 +535,43 @@ def _nudge_empty_tool_recovery(messages: list[dict]) -> bool:
     return True
 
 
+def _nudge_system(messages: list[dict], marker: str, nudge: str, log_tag: str) -> bool:
+    for msg in messages:
+        if msg.get("role") != "system":
+            continue
+        text = _message_text(msg)
+        if marker in text:
+            return True
+        _set_message_text(msg, text + nudge)
+        log.info("[agent] %s", log_tag)
+        return True
+    messages.insert(0, {"role": "system", "content": nudge.strip()})
+    log.info("[agent] %s (new system)", log_tag)
+    return True
+
+
+def _nudge_fake_action_recovery(messages: list[dict]) -> bool:
+    if not _assistant_faked_action(messages):
+        return False
+    return _nudge_system(
+        messages,
+        "[Harness] FAKE ACTION:",
+        _FAKE_ACTION_NUDGE,
+        "fake-action recovery nudge",
+    )
+
+
+def _nudge_html_dump_recovery(messages: list[dict]) -> bool:
+    if not _recent_tool_was_html_dump(messages):
+        return False
+    return _nudge_system(
+        messages,
+        "[Harness] HTML DUMP:",
+        _HTML_DUMP_NUDGE,
+        "html-dump recovery nudge",
+    )
+
+
 def _tool_schema_names(body: dict) -> list[str]:
     names: list[str] = []
     for t in body.get("tools") or []:
@@ -498,6 +624,10 @@ def _prepare_body(body: dict) -> dict[str, Any]:
         "nudged_multi_step": False,
         "empty_tool_recovery": False,
         "empty_tool_streak": 0,
+        "fake_action": False,
+        "fake_action_recovery": False,
+        "html_dump": False,
+        "html_dump_recovery": False,
         "thinking_off": True,
     }
 
@@ -527,14 +657,22 @@ def _prepare_body(body: dict) -> dict[str, Any]:
         log.info("[mode] compaction → tools stripped, short max_tokens")
         return trace
 
-    # Agentic turns: keep tools; multi-step + empty-tool recovery nudges; temp floor.
+    # Agentic turns: keep tools; multi-step + recovery nudges; temp floor.
     if _has_tools(body) and isinstance(messages, list):
         _nudge_agent_multi_step(messages)
         trace["nudged_multi_step"] = True
         streak = _recent_empty_tool_streak(messages)
         trace["empty_tool_streak"] = streak
-        if streak >= 1 and _nudge_empty_tool_recovery(messages):
+        html_dump = _recent_tool_was_html_dump(messages)
+        fake = _assistant_faked_action(messages)
+        trace["html_dump"] = html_dump
+        trace["fake_action"] = fake
+        if html_dump and _nudge_html_dump_recovery(messages):
+            trace["html_dump_recovery"] = True
+        elif streak >= 1 and _nudge_empty_tool_recovery(messages):
             trace["empty_tool_recovery"] = True
+        if fake and _nudge_fake_action_recovery(messages):
+            trace["fake_action_recovery"] = True
 
     temp = body.get("temperature")
     try:
@@ -562,6 +700,7 @@ def _log_request_harness(body: dict, trace: dict[str, Any], *, stream: bool) -> 
         "[harness] req compaction=%s stream=%s %s tools_in=%s tools_out=%s "
         "tool_choice_in=%s tool_choice_out=%s tool_names=[%s] max_tokens=%s "
         "multi_step_nudge=%s empty_tool_recovery=%s empty_tool_streak=%s "
+        "fake_action=%s html_dump=%s "
         "truncate_tools=%s model=%s",
         trace.get("compaction"),
         stream,
@@ -575,6 +714,8 @@ def _log_request_harness(body: dict, trace: dict[str, Any], *, stream: bool) -> 
         trace.get("nudged_multi_step"),
         trace.get("empty_tool_recovery"),
         trace.get("empty_tool_streak"),
+        trace.get("fake_action"),
+        trace.get("html_dump"),
         trace.get("truncated_tool_msgs"),
         body.get("model"),
     )

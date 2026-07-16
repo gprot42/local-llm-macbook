@@ -391,6 +391,58 @@ def run_unit_tests(report: Report) -> None:
         tr_s["compaction"] is True and "tools" not in body_strip,
     )
 
+    
+    print("\n== Unit: fake action + HTML dump recovery ==")
+    report.check(
+        "unit: executing probe prose is fake action",
+        proxy._assistant_faked_action(
+            [
+                {"role": "user", "content": "go"},
+                {
+                    "role": "assistant",
+                    "content": "I will start by checking the tree.\n\nExecuting probe...",
+                },
+            ]
+        ),
+    )
+    report.check(
+        "unit: tool_calls exempts fake action",
+        not proxy._assistant_faked_action(
+            [
+                {
+                    "role": "assistant",
+                    "content": "Executing probe...",
+                    "tool_calls": [{"id": "1", "function": {"name": "bash"}}],
+                }
+            ]
+        ),
+    )
+    _html = "<!DOCTYPE html>" + (
+        '<li class="devsite-nav-item"><a class="devsite-nav-title gc-analytics-event" '
+        'data-label="Responsive Tab: X">x</a></li>' * 80
+    )
+    report.check("unit: html chrome dump detected", proxy._looks_like_html_chrome_dump(_html))
+    report.check("unit: html dump counts as empty tool", proxy._is_empty_tool_content(_html))
+    _msgs_fake = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "probe"},
+        {
+            "role": "assistant",
+            "content": "Next I will probe the kernel tree.\nExecuting probe...",
+        },
+    ]
+    _body_fake = {
+        "model": MODEL,
+        "tools": TOOLS,
+        "messages": [dict(m) for m in _msgs_fake],
+    }
+    _tr_fake = proxy._prepare_body(_body_fake)
+    report.check(
+        "unit: prepare fake_action_recovery",
+        _tr_fake.get("fake_action") is True and _tr_fake.get("fake_action_recovery") is True,
+        f"tr={ {k:_tr_fake.get(k) for k in ('fake_action','fake_action_recovery')} }",
+    )
+
     print("\n== Unit: empty tool recovery ==")
 
     report.check("unit: empty string is empty tool", proxy._is_empty_tool_content(""))

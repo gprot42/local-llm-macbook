@@ -56,7 +56,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 # Defaults
 # ---------------------------------------------------------------------------
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UA = os.environ.get("RESEARCH_UA", "Mozilla/5.0")
 DEFAULT_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "30"))
@@ -630,6 +630,48 @@ def strip_html(raw: str) -> str:
     return raw.strip()
 
 
+def extract_readable_page(body: bytes, max_chars: int = 40000) -> tuple[str, str]:
+    """
+    Agent-friendly page text: prefer <article>/<main>/devsite body, strip chrome.
+    Returns (title, plain_text).
+    """
+    try:
+        raw = body.decode("utf-8", errors="replace")
+    except Exception:
+        return "", ""
+    title = ""
+    tm = TITLE_RE.search(raw)
+    if tm:
+        title = re.sub(r"\s+", " ", html.unescape(tm.group(1))).strip()
+
+    chunk = raw
+    for pat in (
+        r'(?is)<div[^>]+class="[^"]*devsite-article-body[^"]*"[^>]*>(.*)</div>\s*(?:<footer|</article|$)',
+        r'(?is)<article[^>]*>(.*?)</article>',
+        r'(?is)<main[^>]*>(.*?)</main>',
+        r'(?is)id=["\']main-content["\'][^>]*>(.*)',
+        r'(?is)<div[^>]+itemprop=["\']articleBody["\'][^>]*>(.*?)</div>',
+    ):
+        mm = re.search(pat, raw)
+        if mm and len(mm.group(1)) > 400:
+            chunk = mm.group(1)
+            break
+
+    plain = strip_html(chunk)
+    # drop ultra-common chrome leftovers
+    drop_lines = re.compile(
+        r"(?i)^(skip to main content|android open source project|search|"
+        r"appearance|sign in|contents|on this page|was this helpful)\s*$"
+    )
+    lines = [ln for ln in plain.splitlines() if not drop_lines.match(ln.strip())]
+    plain = "\n".join(lines)
+    plain = re.sub(r"\n{3,}", "\n\n", plain).strip()
+    if len(plain) > max_chars:
+        plain = plain[:max_chars] + f"\n\n… truncated readable text at {max_chars} chars. Prefer: research-tool grep PATTERN URL"
+    return title, plain
+
+
+
 def extract_title(body: bytes) -> str:
     try:
         text = body.decode("utf-8", errors="replace")
@@ -1053,6 +1095,13 @@ def cmd_multi(args: argparse.Namespace) -> int:
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
+    """
+    Fetch a URL for agents.
+
+    Default for HTML: readable plain text (main content), NOT raw DevSite chrome.
+    Use --raw for original HTML bytes; --out FILE always writes full body.
+    Prefer grep/repos when searching for a token.
+    """
     url = args.url
     for w in warn_url_hygiene(url):
         print(f"WARN: {w}", file=sys.stderr)
@@ -1094,23 +1143,58 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             )
         return 0
 
-    chunk, truncated = truncate_body(body, args.max_bytes)
-    if args.plain:
-        text = strip_html(chunk.decode("utf-8", errors="replace"))
+    want_raw = getattr(args, "raw", False)
+    htmlish = looks_like_html(body)
+    # Agent default: never dump raw HTML chrome to stdout
+    if htmlish and not want_raw:
+        max_chars = args.max_bytes if args.max_bytes != DEFAULT_MAX_BYTES else 40000
+        if getattr(args, "plain", False) or True:
+            title, plain = extract_readable_page(body, max_chars=max_chars)
+        meta = (
+            f"# http={r.get('http_code')} title={title!r} bytes={len(body)} "
+            f"mode=readable\n"
+            f"# Prefer: {sys.argv[0]} grep PATTERN '{url}'\n"
+            f"# Full HTML: {sys.argv[0]} fetch --raw --out /tmp/page.html '{url}'\n"
+        )
         if args.json:
             emit(
                 {
                     "ok": True,
                     "http_code": r["http_code"],
-                    "text": text,
+                    "title": title,
+                    "text": plain,
+                    "mode": "readable",
+                    "bytes": len(body),
+                    "from_cache": r.get("from_cache"),
+                },
+                as_json=True,
+            )
+        else:
+            sys.stdout.write(meta)
+            sys.stdout.write(plain)
+            if not plain.endswith("\n"):
+                sys.stdout.write("\n")
+        if r.get("from_cache"):
+            print(f"# from_cache={r.get('cache_path')}", file=sys.stderr)
+        return 0
+
+    chunk, truncated = truncate_body(body, args.max_bytes)
+    if args.plain:
+        out_text = strip_html(chunk.decode("utf-8", errors="replace"))
+        if args.json:
+            emit(
+                {
+                    "ok": True,
+                    "http_code": r["http_code"],
+                    "text": out_text,
                     "truncated": truncated,
                     "from_cache": r.get("from_cache"),
                 },
                 as_json=True,
             )
         else:
-            sys.stdout.write(text)
-            if not text.endswith("\n"):
+            sys.stdout.write(out_text)
+            if not out_text.endswith("\n"):
                 sys.stdout.write("\n")
     else:
         sys.stdout.buffer.write(chunk)
@@ -1938,17 +2022,27 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("urls", nargs="+")
     sp.set_defaults(func=cmd_multi)
 
-    sp = add_sub("fetch", help="Download page body (capped)")
+    sp = add_sub(
+        "fetch",
+        help="Download page (HTML→readable text by default; --raw for HTML)",
+    )
     sp.add_argument("url")
-    sp.add_argument("--out", "-o", help="write full body to file")
+    sp.add_argument("--out", "-o", help="write full raw body to file")
     sp.add_argument(
         "--max-bytes",
         type=int,
         default=DEFAULT_MAX_BYTES,
-        help=f"stdout cap (default {DEFAULT_MAX_BYTES})",
+        help=f"stdout cap (default {DEFAULT_MAX_BYTES}; readable HTML uses 40k)",
     )
     sp.add_argument(
-        "--plain", action="store_true", help="strip HTML to approximate text"
+        "--plain",
+        action="store_true",
+        help="force strip-all HTML (default already readable for HTML pages)",
+    )
+    sp.add_argument(
+        "--raw",
+        action="store_true",
+        help="emit raw HTML/bytes to stdout (floods context — avoid in agents)",
     )
     add_cache_flags(sp)
     sp.set_defaults(func=cmd_fetch)
