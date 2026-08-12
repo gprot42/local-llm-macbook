@@ -22,6 +22,12 @@ Why this exists
 3. **Context bloat**
    Truncate large ``role=tool`` message bodies before they hit the model.
 
+4. **Prose / monologue loops**
+   Local models sometimes re-count the same format string or re-derive the
+   same answer for thousands of tokens (then hit the output limit). Detect
+   high line/n-gram repetition on the last tool-less assistant turn and
+   inject a system nudge: stop prose, emit edit/bash tool_calls now.
+
 Usage:
   python3 gemma4_kilo_proxy.py --upstream http://127.0.0.1:8090 --port 8080
 """
@@ -33,6 +39,7 @@ import json
 import logging
 import re
 import sys
+from collections import Counter
 from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -356,6 +363,14 @@ _HTML_DUMP_NUDGE = (
     "./research-tool.py repos PATTERN — never dump full HTML via fetch/curl."
 )
 
+_PROSE_LOOP_NUDGE = (
+    "\n\n[Harness] PROSE LOOP: the last assistant turn repeated the same reasoning "
+    "(same lines / format-string counting / 'Wait, looking at…') without tool_calls. "
+    "STOP monologuing. Your next message MUST be tool_calls only — edit the file and/or "
+    "run the command. Do not re-count fields, re-derive format strings, or restate the "
+    "same arithmetic. One edit + one bash verify beats a page of counting."
+)
+
 # Prose that pretends a tool ran / will run without tool_calls
 _FAKE_ACTION_RE = re.compile(
     r"(?is)"
@@ -384,6 +399,87 @@ _EMPTY_TOOL_EXACT = frozenset(
         '""',
     }
 )
+
+# Stuck-in-counting / re-deriving markers (need ≥3 hits in one assistant turn)
+_PROSE_LOOP_MARKERS = (
+    re.compile(r"(?i)\bwait,?\s+looking at\b"),
+    re.compile(r"(?i)\blet'?s count(?:\s+again)?\b"),
+    re.compile(r"(?i)\blet'?s just count\b"),
+    re.compile(r"(?i)\bthat is wrong\.?\s+let'?s\b"),
+    re.compile(r"(?i)\blooking at the code again\b"),
+    re.compile(r"(?i)\bre-?examine the code\b"),
+    re.compile(r"(?i)\bformat string\b.{0,40}\bwrong\b"),
+    re.compile(r"(?i)\bcount(?:ing)?\s+(?:the\s+)?(?:items|fields|Hs|Is)\b"),
+)
+
+# Minimum length before we consider monologue-loop detection (chars).
+_PROSE_LOOP_MIN_CHARS = 400
+# Same non-trivial line must appear this many times.
+_PROSE_LOOP_LINE_REPEAT = 4
+# Same 8-word n-gram must appear this many times.
+_PROSE_LOOP_NGRAM_REPEAT = 5
+# If many n-grams but few unique → low diversity loop.
+_PROSE_LOOP_NGRAM_MIN = 80
+_PROSE_LOOP_DIVERSITY_MAX = 0.35
+
+
+def _looks_like_prose_loop(text: str) -> bool:
+    """True when assistant prose is stuck re-counting / repeating itself.
+
+    Catches cases like re-deriving a struct.pack format string dozens of times
+    until the output limit — without ever calling edit/bash.
+    """
+    t = (text or "").strip()
+    if len(t) < _PROSE_LOOP_MIN_CHARS:
+        return False
+
+    # Marker phrases that only show up in thrashing monologues
+    for pat in _PROSE_LOOP_MARKERS:
+        if len(pat.findall(t)) >= 3:
+            return True
+
+    # Identical non-trivial lines repeated many times
+    lines = [ln.strip() for ln in t.splitlines() if len(ln.strip()) >= 20]
+    if lines:
+        top_line_n = Counter(lines).most_common(1)[0][1]
+        if top_line_n >= _PROSE_LOOP_LINE_REPEAT:
+            return True
+
+    # Word n-gram repetition / low diversity
+    words = re.findall(r"[A-Za-z0-9_<>\"'=.-]+", t.lower())
+    if len(words) >= _PROSE_LOOP_NGRAM_MIN:
+        n = 8
+        grams = [" ".join(words[i : i + n]) for i in range(len(words) - n + 1)]
+        if grams:
+            top_n = Counter(grams).most_common(1)[0][1]
+            if top_n >= _PROSE_LOOP_NGRAM_REPEAT:
+                return True
+            if (
+                len(grams) >= _PROSE_LOOP_NGRAM_MIN
+                and len(set(grams)) / len(grams) < _PROSE_LOOP_DIVERSITY_MAX
+            ):
+                return True
+
+    return False
+
+
+def _assistant_prose_loop(messages: list[dict] | None) -> bool:
+    """Last assistant turn has no tool_calls and looks like a monologue loop."""
+    if not messages:
+        return False
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role in ("tool", "function"):
+            return False
+        if role == "assistant":
+            if msg.get("tool_calls"):
+                return False
+            return _looks_like_prose_loop(_message_text(msg))
+        if role == "user":
+            return False
+    return False
 
 
 def _looks_like_html_chrome_dump(text: str) -> bool:
@@ -572,6 +668,17 @@ def _nudge_html_dump_recovery(messages: list[dict]) -> bool:
     )
 
 
+def _nudge_prose_loop_recovery(messages: list[dict]) -> bool:
+    if not _assistant_prose_loop(messages):
+        return False
+    return _nudge_system(
+        messages,
+        "[Harness] PROSE LOOP:",
+        _PROSE_LOOP_NUDGE,
+        "prose-loop recovery nudge",
+    )
+
+
 def _tool_schema_names(body: dict) -> list[str]:
     names: list[str] = []
     for t in body.get("tools") or []:
@@ -628,6 +735,8 @@ def _prepare_body(body: dict) -> dict[str, Any]:
         "fake_action_recovery": False,
         "html_dump": False,
         "html_dump_recovery": False,
+        "prose_loop": False,
+        "prose_loop_recovery": False,
         "thinking_off": True,
     }
 
@@ -665,14 +774,18 @@ def _prepare_body(body: dict) -> dict[str, Any]:
         trace["empty_tool_streak"] = streak
         html_dump = _recent_tool_was_html_dump(messages)
         fake = _assistant_faked_action(messages)
+        prose_loop = _assistant_prose_loop(messages)
         trace["html_dump"] = html_dump
         trace["fake_action"] = fake
+        trace["prose_loop"] = prose_loop
         if html_dump and _nudge_html_dump_recovery(messages):
             trace["html_dump_recovery"] = True
         elif streak >= 1 and _nudge_empty_tool_recovery(messages):
             trace["empty_tool_recovery"] = True
         if fake and _nudge_fake_action_recovery(messages):
             trace["fake_action_recovery"] = True
+        if prose_loop and _nudge_prose_loop_recovery(messages):
+            trace["prose_loop_recovery"] = True
 
     temp = body.get("temperature")
     try:
@@ -700,7 +813,7 @@ def _log_request_harness(body: dict, trace: dict[str, Any], *, stream: bool) -> 
         "[harness] req compaction=%s stream=%s %s tools_in=%s tools_out=%s "
         "tool_choice_in=%s tool_choice_out=%s tool_names=[%s] max_tokens=%s "
         "multi_step_nudge=%s empty_tool_recovery=%s empty_tool_streak=%s "
-        "fake_action=%s html_dump=%s "
+        "fake_action=%s html_dump=%s prose_loop=%s "
         "truncate_tools=%s model=%s",
         trace.get("compaction"),
         stream,
@@ -716,6 +829,7 @@ def _log_request_harness(body: dict, trace: dict[str, Any], *, stream: bool) -> 
         trace.get("empty_tool_streak"),
         trace.get("fake_action"),
         trace.get("html_dump"),
+        trace.get("prose_loop"),
         trace.get("truncated_tool_msgs"),
         body.get("model"),
     )

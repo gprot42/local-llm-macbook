@@ -1,0 +1,44 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "mtplx-qwen38/qwen3.8-27b-mtplx",
+  "agent": {
+    "build": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "plan": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "bash": "allow"
+  },
+  "provider": {
+    "mtplx-qwen38": {
+      "name": "mtplx Qwen3.8 (local MTP)",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://localhost:8766/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "qwen3.8-27b-mtplx": {
+          "name": "Qwen3.8 27B — mtplx MTP (coding / agents)",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        }
+      }
+    }
+  }
+}

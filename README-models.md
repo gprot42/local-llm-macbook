@@ -13,6 +13,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | Stack | Folder | Input | Notes |
 |-------|--------|-------|-------|
 | **Qwen 3.6 27B mtplx** | `censored/qwen3-6-27b-coder-mtplx/` | **Text only** | Coding default; native MTP heads |
+| **Qwen 3.8 27B mtplx** | `censored/qwen3-8-27b-coder-mtplx/` | **Text only** | Next 27B; harness ready; weights when published |
 | **DeepSeek V4 Flash ds4** | `censored/deepseek-v4-flash-ds4/` | **Text only** | Native Metal GGUF |
 | **DeepSeek V4 Flash MLX** | `censored/deepseek-v4-flash-2bit-dq-mlx/` | **Text only** | mlx-lm community path |
 | **Gemma 4 31B AtomicChat** | `censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/` | **Text only** | Language quant + chat template; not a vision package |
@@ -51,7 +52,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 
 | You want… | Prefer | Avoid |
 |-----------|--------|-------|
-| Snappy Kilo tool loops | **Qwen 3.6 27B mtplx** (`:8765`) | DeepSeek / Qwen3.5-122B for “feel fast” |
+| Snappy Kilo tool loops | **Qwen 3.6 27B mtplx** (`:8765`); try **Qwen 3.8** (`:8766`) when weights land | DeepSeek / Qwen3.5-122B for “feel fast” |
 | Hard multi-file coding quality | **DeepSeek V4 Flash ds4** (`:8083`) | ≤64 GB machines; co-loading another 70+ GB model |
 | Uncensored chat (Gemma + vision) | **Gemma Heretic** or **JANG CRACK** (`:8080`) | Unattended huge agent refactors |
 | Uncensored dense Qwen | **Qwen3-32B Heretic** (`:8084`) | Expecting Qwen3.6 / MTP speed |
@@ -88,6 +89,28 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 - Uncensored / low-refusal chat
 - Frontier-level greenfield apps where DeepSeek quality wins
 - Very long histories without compacting (prefill dominates; MTP helps decode, not prefill)
+
+---
+
+### Qwen 3.8 27B — mtplx (`censored/qwen3-8-27b-coder-mtplx/`)
+
+| | |
+|--|--|
+| **Role** | 🟡 **Next coding 27B** — harness ready; pull when HF publishes |
+| **Modality** | **Text only** |
+| **Engine / size** | mtplx (+ MTP when checkpoint has heads) · ~similar to 3.6 4-bit |
+| **API** | `:8766/v1` · Kilo: `mtplx-qwen38/qwen3.8-27b-mtplx` |
+| **Harness** | `test_harness.py` (`--gate` on post-start) |
+
+**Good for**
+
+- Evaluating Qwen3.8-27B as soon as open weights / MLX quants land
+- Same Kilo tool-loop workflow as Qwen 3.6 (different port)
+
+**Not good for**
+
+- Machines that still only have Qwen3.6 weights (use the 3.6 stack)
+- Co-loading with Qwen 3.6 on tight RAM
 
 ---
 

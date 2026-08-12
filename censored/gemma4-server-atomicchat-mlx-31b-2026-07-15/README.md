@@ -146,7 +146,7 @@ Cause: auto-compaction still sent `tools`, so Gemma kept exploring instead of wr
 
 | Layer | What it does |
 |-------|----------------|
-| `gemma4_kilo_proxy.py` (default) | **Thinking OFF** so Kilo gets `content`; **never strip tools** when `tools` + `tool_choice≠none` (agent turns); compaction only for `tool_choice=none` / real summary user turns; remap reasoning→content; truncate huge tool results |
+| `gemma4_kilo_proxy.py` (default) | **Thinking OFF** so Kilo gets `content`; **never strip tools** when `tools` + `tool_choice≠none` (agent turns); compaction only for `tool_choice=none` / real summary user turns; remap reasoning→content; truncate huge tool results; **prose-loop recovery** when the last tool-less assistant turn re-counts the same lines/format string |
 | `kilo.json` `compaction.reserved` | Leaves ~12k tokens free so compact runs before the window is full |
 | `agent.compaction` prompt | Forces ≤~40 line plain text — no Goal/Progress spam |
 | Tighter `tool_output` | Smaller dumps so prune/truncation has less to keep |
@@ -182,6 +182,8 @@ tail -f /tmp/gemma4_kilo_proxy.log
 | Full Kilo TUI/session | Real product | Permissions, compaction UI, prune — not reimplemented |
 
 **Empty tool recovery:** if the latest tool result is empty, the proxy injects a system nudge: do not write a revised plan — next action must be a local `ls`/`glob`/`grep`/`read`.
+
+**Prose-loop recovery:** if the last assistant message has no `tool_calls` and looks like a monologue loop (same line repeated, low n-gram diversity, or thrashing phrases like “Wait, looking at…” / re-counting fields), the proxy injects: stop prose — next turn must be `edit`/`bash` tool_calls. Agent prompts also ban re-counting the same format string twice. This does not stop a *current* stream mid-token; it steers the **next** request after a loop hit the output limit.
 
 Reload Kilo after changing `kilo.json`. After a failed overflow session, **start a new chat** (the dead session cannot recover).
 

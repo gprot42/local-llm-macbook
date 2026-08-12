@@ -443,6 +443,55 @@ def run_unit_tests(report: Report) -> None:
         f"tr={ {k:_tr_fake.get(k) for k in ('fake_action','fake_action_recovery')} }",
     )
 
+    print("\n== Unit: prose / monologue loop recovery ==")
+    _loop_line = (
+        'Wait, looking at the code again: format string "<IHHHHHIIIIHH" is wrong. '
+        "Let's count again. That is wrong. Let's use the same format string."
+    )
+    _loop_text = "\n".join([_loop_line] * 6)
+    report.check(
+        "unit: repeated counting lines are prose loop",
+        proxy._looks_like_prose_loop(_loop_text),
+    )
+    report.check(
+        "unit: short normal answer is not prose loop",
+        not proxy._looks_like_prose_loop(
+            "I'll fix the format string to IHHHHHIIIIHH and re-run the script."
+        ),
+    )
+    report.check(
+        "unit: tool_calls exempts prose loop",
+        not proxy._assistant_prose_loop(
+            [
+                {
+                    "role": "assistant",
+                    "content": _loop_text,
+                    "tool_calls": [{"id": "1", "function": {"name": "edit"}}],
+                }
+            ]
+        ),
+    )
+    _msgs_loop = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "fix the zip script"},
+        {"role": "assistant", "content": _loop_text},
+    ]
+    _body_loop = {
+        "model": MODEL,
+        "tools": TOOLS,
+        "messages": [dict(m) for m in _msgs_loop],
+    }
+    _tr_loop = proxy._prepare_body(_body_loop)
+    report.check(
+        "unit: prepare prose_loop_recovery",
+        _tr_loop.get("prose_loop") is True and _tr_loop.get("prose_loop_recovery") is True,
+        f"tr={ {k: _tr_loop.get(k) for k in ('prose_loop', 'prose_loop_recovery')} }",
+    )
+    report.check(
+        "unit: prose loop nudge injected into system",
+        "[Harness] PROSE LOOP:" in _body_loop["messages"][0]["content"],
+    )
+
     print("\n== Unit: empty tool recovery ==")
 
     report.check("unit: empty string is empty tool", proxy._is_empty_tool_content(""))
