@@ -64,6 +64,11 @@ weights/
 # mtplx / HF downloads for the Qwen coding stack (inside project dir)
 **/qwen3-6-27b-coder-mtplx/**/models/
 **/qwen3-6-27b-coder-mtplx/**/checkpoints/
+# Muse Glimmer 30B MLX checkouts (download via 1_setup_download.sh)
+**/muse-glimmer-30b-mlx/.mlx_config
+**/muse-glimmer-30b-mlx/muse-glimmer-30b-assistant/
+**/muse-glimmer-30b-mlx/mlx-community--muse-glimmer-30b-*/
+**/muse-glimmer-30b-mlx/meta-models--muse-glimmer-30b*
 # Uncensored Qwen HF checkouts (weights + tokenizer; download via 1_setup_download.sh)
 **/qwen3-32b-heretic-mlx/qwen3-32b-heretic-mlx-5bit/
 **/qwen3-32b-heretic-mlx/.qwen3_heretic_config

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "muse-glimmer/muse-glimmer-30b-mlx",
+  "agent": {
+    "build": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "prompt": "Reasoning strength: high.\nYou are a coding agent on local Muse Glimmer 30B (aligned, text + image). Context and prefill are expensive; thinking cannot be switched off — keep it useful, then act.\n\nSession honesty (critical):\n- Only recount work visible in THIS conversation. Never invent goals, progress, prior edits, or tasks from other sessions.\n- If the user asks what we did so far and this session has no real prior work: say nothing was done yet and ask what they want.\n- Never edit a file you have not Read in this conversation.\n- Do not emit Goal/Progress/Next Steps templates unless the user asked for a status summary.\n\nContinue / resume: when the user says continue / keep going, immediately run tools for the next unfinished step. Prefer a tool call in the first assistant turn.\n\nFinish multi-step work: complete ALL requested steps before stopping. After each tool result, call the next tool. Never end a turn with only \"I will check…\".\n\nAnti-loop: if you re-derive the same fact twice, STOP prose and emit tool_calls. Empty/useless tool output: immediately run a LOCAL ls/glob/grep/read on a real workspace path.\n\nContext: glob/grep first; at most 3–4 file reads per turn. Verify with typecheck/build/tests early."
+    },
+    "plan": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "prompt": "Reasoning strength: medium.\nPlan only work the user requested in THIS chat. Prefer glob/grep; at most 3–4 file reads. Short ordered plan with risks and verification — not a file dump. On continue: do not re-plan; hand off the first unchecked step."
+    },
+    "explore": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "prompt": "Reasoning strength: medium.\nExplore with glob/grep first; at most 3 file reads per turn. Stop when you can answer. Multi-step explore: keep calling tools until every requested path is done."
+    },
+    "debug": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "prompt": "Reasoning strength: high.\nStart from the error/log/stack. Read a file before editing it. Reproduce early, fix smallest root cause, re-verify."
+    },
+    "compaction": {
+      "temperature": 0.2,
+      "top_p": 0.9,
+      "steps": 1,
+      "prompt": "Reasoning strength: low.\nCompress conversation context. Output plain text only. Do not call tools. At most ~40 short lines: user goal, constraints, key decisions, files touched, errors, single next action."
+    },
+    "code": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "bash": "allow"
+  },
+  "provider": {
+    "muse-glimmer": {
+      "name": "Muse Glimmer 30B (mlx-vlm, local)",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://127.0.0.1:8087/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "muse-glimmer-30b-mlx": {
+          "name": "Muse Glimmer 30B — mlx-vlm 4-bit + DFlash (aligned, text + image)",
+          "attachment": true,
+          "tool_call": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 16384
+  },
+  "tool_output": {
+    "max_lines": 200,
+    "max_bytes": 16384
+  },
+  "default_agent": "build"
+}

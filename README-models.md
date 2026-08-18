@@ -14,6 +14,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 |-------|--------|-------|-------|
 | **Qwen 3.6 27B mtplx** | `censored/qwen3-6-27b-coder-mtplx/` | **Text only** | Coding default; native MTP heads |
 | **Qwen 3.8 27B mtplx** | `censored/qwen3-8-27b-coder-mtplx/` | **Text only** | Next 27B; harness ready; weights when published |
+| **Muse Glimmer 30B** | `censored/muse-glimmer-30b-mlx/` | **Text + image** | Meta MSL agentic 30B; mlx-vlm + official DFlash |
 | **DeepSeek V4 Flash ds4** | `censored/deepseek-v4-flash-ds4/` | **Text only** | Native Metal GGUF |
 | **DeepSeek V4 Flash MLX** | `censored/deepseek-v4-flash-2bit-dq-mlx/` | **Text only** | mlx-lm community path |
 | **Gemma 4 31B AtomicChat** | `censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/` | **Text only** | Language quant + chat template; not a vision package |
@@ -34,13 +35,15 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | `mlx-community/gemma-4-31b-it-4bit` | **Text + image** | Stock multimodal quant; **vision graft source** for Heretic (not the AtomicChat text stack) |
 | `mlx-community/gemma-4-31B-it-assistant-bf16` | **Text draft only** | MTP speculative drafter (~1 GB); not a chat model; optional / skip for reliability |
 | `z-lab/Qwen3.5-122B-A10B-DFlash` | **Text draft only** | DFlash block-diffusion draft; not standalone chat |
+| `mlx-community/Muse-Glimmer-30B-4bit` | **Text + image** | Default Muse Glimmer MLX quant (~19.4 GB) |
+| `meta-models/Muse-Glimmer-30B-assistant` | **Text draft only** | Official DFlash drafter (~5 GB); not a chat model |
 
 ### Pick by modality
 
 | You need… | Use |
 |-----------|-----|
-| Text coding / agents | Qwen 3.6, DeepSeek, AtomicChat, Ornith, Qwen3/3.5/GLM stacks |
-| Images in Kilo (attach / paste) | **Heretic** (grafted), **JANG CRACK** (native), or **DiffusionGemma** (vision-first research) |
+| Text coding / agents | Qwen 3.6, DeepSeek, AtomicChat, Ornith, Qwen3/3.5/GLM stacks, Muse Glimmer |
+| Images in Kilo (attach / paste) | **Muse Glimmer** (aligned), **Heretic** (grafted), **JANG CRACK** (native), or **DiffusionGemma** (vision-first research) |
 | Aligned Gemma text only | **AtomicChat** — do not expect image understanding |
 | Vision weights for grafting | `mlx-community/gemma-4-31b-it-4bit`, not AtomicChat |
 
@@ -53,6 +56,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 | You want… | Prefer | Avoid |
 |-----------|--------|-------|
 | Snappy Kilo tool loops | **Qwen 3.6 27B mtplx** (`:8765`); try **Qwen 3.8** (`:8766`) when weights land | DeepSeek / Qwen3.5-122B for “feel fast” |
+| Aligned local agents + screenshots | **Muse Glimmer 30B** (`:8087`) | Ultra-snappy loops (thinking is always on) |
 | Hard multi-file coding quality | **DeepSeek V4 Flash ds4** (`:8083`) | ≤64 GB machines; co-loading another 70+ GB model |
 | Uncensored chat (Gemma + vision) | **Gemma Heretic** or **JANG CRACK** (`:8080`) | Unattended huge agent refactors |
 | Uncensored dense Qwen | **Qwen3-32B Heretic** (`:8084`) | Expecting Qwen3.6 / MTP speed |
@@ -111,6 +115,35 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 
 - Machines that still only have Qwen3.6 weights (use the 3.6 stack)
 - Co-loading with Qwen 3.6 on tight RAM
+
+---
+
+### Muse Glimmer 30B — mlx-vlm (`censored/muse-glimmer-30b-mlx/`)
+
+| | |
+|--|--|
+| **Role** | 🟢 **Aligned local agents** — tools + images + DFlash |
+| **Modality** | **Text + image** |
+| **Engine / size** | mlx-vlm ≥ 0.6.12 + official DFlash · ~19.4 GB 4-bit + ~5 GB drafter |
+| **HF** | `mlx-community/Muse-Glimmer-30B-4bit` · drafter `meta-models/Muse-Glimmer-30B-assistant` |
+| **API** | `:8087/v1` · Kilo: `muse-glimmer/muse-glimmer-30b-mlx` |
+| **Harness** | `test_harness.py` (`--gate` on post-start) |
+| **Sampling** | `temperature=1.0`, `top_p=0.95`, `top_k=64` |
+| **Announcement** | [Alexandr Wang 2026-08-10](https://x.com/alexandr_wang/status/2086756152034066792) · [Meta post](https://research.meta.ai/blog/introducing-muse-glimmer-open-agentic-model) |
+
+**Good for**
+
+- Local agent / function-calling loops with a dedicated perception encoder
+- Screenshots, charts, and documents alongside chat
+- SWE-style coding on a 24–32 GB-class 4-bit envelope
+
+**Not good for**
+
+- Ultra-snappy Qwen-style tool loops (thinking cannot be switched off)
+- Uncensored / low-refusal chat
+- Co-loading with another 20+ GB model on ≤128 GB
+
+**Reasoning:** put `Reasoning strength: low|medium|high|xhigh` in the system prompt. This stack’s `kilo.json` uses **high** for build/debug.
 
 ---
 

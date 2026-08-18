@@ -14,6 +14,7 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 |--------|--------------------------|------|------------|-----|
 | [`censored/qwen3-6-27b-coder-mtplx/`](censored/qwen3-6-27b-coder-mtplx/) | `mtplx/qwen3.6-27b-mtplx` | 🟢 **Default coding** — Qwen 3.6 27B (mtplx MTP) | Text | `:8765/v1` |
 | [`censored/qwen3-8-27b-coder-mtplx/`](censored/qwen3-8-27b-coder-mtplx/) | `mtplx-qwen38/qwen3.8-27b-mtplx` | 🟡 **Qwen 3.8 27B** (mtplx MTP; weights when published) | Text | `:8766/v1` |
+| [`censored/muse-glimmer-30b-mlx/`](censored/muse-glimmer-30b-mlx/) | `muse-glimmer/muse-glimmer-30b-mlx` | 🟢 **Muse Glimmer 30B** (mlx-vlm + DFlash; local agents) | **Text + image** | `:8087/v1` |
 | [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `ds4/deepseek-v4-flash` | 🟢 **Great for coding** (128 GB, native Metal) | Text | `:8083/v1` |
 | [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `deepseek-mlx/deepseek-v4-flash-2bit-dq` | 🟡 **Heavy coding** (128 GB, MLX) | Text | `:8082/v1` |
 | [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` | 🟢 Stock Gemma 4 31B IT (AtomicChat 2026-07-15) | Text | `:8080/v1` |
@@ -31,7 +32,7 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`uncensored/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/qwen3.5-122b-a10b-dflash-mlx/) | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` | 🟡 Uncensored 122B + **DFlash** (fast decode; Kilo agents flaky) | Text | `:8086/v1` |
 | [`uncensored/glm-4.7-flash-heretic-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-gguf-ollama/) | `glm/glm-4.7-flash-heretic-q8` | 🟢 Uncensored MoE (Ollama) | Text | `:18083/v1` |
 
-**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Ornith (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB.
+**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Muse Glimmer (`8087`), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Ornith (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB.
 
 ---
 
@@ -54,7 +55,7 @@ cd censored/qwen3-6-27b-coder-mtplx
 
 Other stacks: `1_*` setup/download → `2_*` start → select the model ID for that folder (table above). Details in each directory’s README.
 
-**Kilo config layers:** monorepo root [`kilo.json`](kilo.json) is the global source of truth (providers + default model + harness prompts). Install it with **`./install_kilo.sh`** → `~/.config/kilo/kilo.jsonc`. Stack folders also have a local `kilo.json` (used when you launch Kilo from that directory). When changing harness rules or the default model for everyone, edit **root** `kilo.json` and re-run `./install_kilo.sh` — not only a stack file. Current default: **`openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit`**.
+**Kilo config layers:** monorepo root [`kilo.json`](kilo.json) is the global source of truth (providers + default model + harness prompts). Install it with **`./install_kilo.sh`** → `~/.config/kilo/kilo.jsonc`. Stack folders also have a local `kilo.json` (used when you launch Kilo from that directory). When changing harness rules or the default model for everyone, edit **root** `kilo.json` and re-run `./install_kilo.sh` — not only a stack file. Current default: **`muse-glimmer/muse-glimmer-30b-mlx`**.
 
 ---
 
@@ -69,6 +70,7 @@ Other stacks: `1_*` setup/download → `2_*` start → select the model ID for t
 | Hard multi-file via MLX | 🟡 **DeepSeek V4 Flash MLX** | Prefer ds4 for official GGUF path; RAM ≪ 128 GB |
 | Aligned Gemma 31B | 🟢 **Gemma stock IT** | Same limits as Heretic for heavy agents |
 | Diffusion / vision experiments | 🟢 **DiffusionGemma** | Coding or reliable tool use |
+| Local multimodal agents (tools + images, 4-bit ~20 GB) | 🟢 **Muse Glimmer 30B** | Snappy Qwen-style loops; thinking cannot be switched off |
 | Guided Ollama agent trials | 🟢 **Ornith** | Fast iteration; unattended large tasks |
 | Uncensored large MoE (Qwen3.5 122B abliterated) | 🟢 **Qwen3.5-122B-A10B Abliterated** | RAM ≪ 128 GB; prefer Qwen3.6 27B mtplx for snappy coding |
 
@@ -86,7 +88,7 @@ Other stacks: `1_*` setup/download → `2_*` start → select the model ID for t
 
 **Latency:** speculative decode helps generation, not prefill. Long Kilo histories still cost a large first token — compact or restart when context balloons ([Qwen README](censored/qwen3-6-27b-coder-mtplx/README.md)).
 
-**DeepSeek sampling:** official defaults are `temperature=1.0`, `top_p=1.0` (see stack `kilo.json`). Qwen coding uses `0.6 / 0.95 / top_k 20`.
+**DeepSeek sampling:** official defaults are `temperature=1.0`, `top_p=1.0` (see stack `kilo.json`). Qwen coding uses `0.6 / 0.95 / top_k 20`. Muse Glimmer uses `1.0 / 0.95 / top_k 64` and always thinks (`Reasoning strength: low|medium|high|xhigh`).
 
 ---
 
@@ -100,6 +102,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 |---|--------|----------|-----------------|
 | 🟢 | [`censored/qwen3-6-27b-coder-mtplx/`](censored/qwen3-6-27b-coder-mtplx/) | `http://localhost:8765/v1` | `mtplx/qwen3.6-27b-mtplx` |
 | 🟡 | [`censored/qwen3-8-27b-coder-mtplx/`](censored/qwen3-8-27b-coder-mtplx/) | `http://localhost:8766/v1` | `mtplx-qwen38/qwen3.8-27b-mtplx` |
+| 🟢 | [`censored/muse-glimmer-30b-mlx/`](censored/muse-glimmer-30b-mlx/) | `http://127.0.0.1:8087/v1` | `muse-glimmer/muse-glimmer-30b-mlx` |
 | 🟢 | [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `http://127.0.0.1:8083/v1` | `ds4/deepseek-v4-flash` |
 | 🟡 | [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `http://127.0.0.1:8082/v1` | `deepseek-mlx/deepseek-v4-flash-2bit-dq` |
 | 🟢 | [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` |
@@ -119,7 +122,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 
 Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks — macOS may resolve `localhost` to `::1`.
 
-**Image attach (Kilo 7.3.x):** paperclip often missing — use Cmd+V, Shift+drag, or `@` → Attach. Need a vision model + its server. See [diffusion README](censored/diffusiongemma4-26b-a4b-mlx/README-diffusiongemma4.md).
+**Image attach (Kilo 7.3.x):** paperclip often missing — use Cmd+V, Shift+drag, or `@` → Attach. Need a vision model + its server (**Muse Glimmer** `:8087`, Heretic/JANG/Diffusion on `:8080`). See [Muse Glimmer README](censored/muse-glimmer-30b-mlx/README.md) or [diffusion README](censored/diffusiongemma4-26b-a4b-mlx/README-diffusiongemma4.md).
 
 ---
 
