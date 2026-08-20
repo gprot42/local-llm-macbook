@@ -11,6 +11,7 @@ Usage:
   python3 test_harness.py --quick    # skip slower multi-turn / concurrent tests
   python3 test_harness.py --model qwen3.8-27b-obliterated-mtplx
 
+Sampling matches the OBLITERATUS card: temperature=0, top_p=1.0, thinking off.
 We do NOT fully emulate Kilo (no session DB, compaction UI, permissions).
 
 Exit codes:
@@ -34,6 +35,9 @@ from urllib.parse import urlparse
 
 DEFAULT_BASE = "http://127.0.0.1:8767"
 DEFAULT_MODEL = "qwen3.8-27b-obliterated-mtplx"
+# OBLITERATUS card: greedy. Temps above 0.5 degrade; thinking burns the budget.
+DEFAULT_TEMPERATURE = 0.0
+DEFAULT_TOP_P = 1.0
 
 TOOLS = [
     {
@@ -146,6 +150,22 @@ def _http_json(
         raise ConnectionError(str(e.reason if hasattr(e, "reason") else e)) from e
 
 
+def _sample_fields(
+    *,
+    temperature: float = DEFAULT_TEMPERATURE,
+    extra: dict | None = None,
+) -> dict[str, Any]:
+    """Card sampling: greedy, no thinking. extra wins on collisions."""
+    body: dict[str, Any] = {
+        "temperature": temperature,
+        "top_p": DEFAULT_TOP_P,
+        "enable_thinking": False,
+    }
+    if extra:
+        body.update(extra)
+    return body
+
+
 def _chat(
     base: str,
     messages: list[dict],
@@ -154,7 +174,7 @@ def _chat(
     tool_choice: Any = None,
     max_tokens: int = 128,
     stream: bool = False,
-    temperature: float = 0.6,
+    temperature: float = DEFAULT_TEMPERATURE,
     model: str = DEFAULT_MODEL,
     timeout: float = 180.0,
     extra: dict | None = None,
@@ -163,15 +183,13 @@ def _chat(
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         "stream": stream,
+        **_sample_fields(temperature=temperature, extra=extra),
     }
     if tools is not None:
         body["tools"] = tools
     if tool_choice is not None:
         body["tool_choice"] = tool_choice
-    if extra:
-        body.update(extra)
     return _http_json(base, "POST", "/v1/chat/completions", body, timeout=timeout)
 
 
@@ -218,7 +236,19 @@ def _tool_names(msg: dict) -> list[str]:
 
 def _content(msg: dict) -> str:
     c = msg.get("content")
-    return c if isinstance(c, str) else ""
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        parts: list[str] = []
+        for item in c:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and item.get("type") in (None, "text"):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
 
 
 def _resolve_model(base: str, preferred: str) -> str:
@@ -292,7 +322,6 @@ def run_gate_tests(base: str, model: str, report: Report) -> bool:
             max_tokens=16,
             tools=None,
             model=model,
-            temperature=0.2,
         )
         msg = _msg(data) if isinstance(data, dict) else {}
         content = _content(msg).strip()
@@ -320,7 +349,6 @@ def run_gate_tests(base: str, model: str, report: Report) -> bool:
             tool_choice="auto",
             max_tokens=96,
             model=model,
-            temperature=0.3,
         )
         msg = _msg(data) if isinstance(data, dict) else {}
         names = _tool_names(msg)
@@ -344,7 +372,7 @@ def run_gate_tests(base: str, model: str, report: Report) -> bool:
                 "messages": [{"role": "user", "content": "Count: 1 2 3"}],
                 "max_tokens": 24,
                 "stream": True,
-                "temperature": 0.2,
+                **_sample_fields(),
             },
             timeout=90,
         )
@@ -393,7 +421,6 @@ def run_gate_tests(base: str, model: str, report: Report) -> bool:
             tool_choice="auto",
             max_tokens=48,
             model=model,
-            temperature=0.3,
         )
         msg = _msg(data) if isinstance(data, dict) else {}
         content = _content(msg).lower()
@@ -539,7 +566,7 @@ def run_live_tests(
                 ],
                 "max_tokens": 24,
                 "stream": True,
-                "temperature": 0.2,
+                **_sample_fields(),
             },
         )
         chunks = [ln for ln in raw.splitlines() if ln.startswith("data:")]
@@ -739,6 +766,18 @@ def run_live_tests(
     return True
 
 
+def _self_check() -> None:
+    """Offline contract for this stack's sampling + content parsing."""
+    sample = _sample_fields()
+    assert sample["temperature"] == 0.0, sample
+    assert sample["top_p"] == 1.0, sample
+    assert sample["enable_thinking"] is False, sample
+    assert _content({"content": "PING"}) == "PING"
+    assert _content({"content": [{"type": "text", "text": "PING"}]}) == "PING"
+    assert _content({"content": None}) == ""
+    assert _content({}) == ""
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Qwen3.8-27B OBLITERATED mtplx harness smoke tests")
     ap.add_argument("--base", default=DEFAULT_BASE, help="mtplx API base URL")
@@ -770,6 +809,8 @@ def main(argv: list[str] | None = None) -> int:
         f"gate={args.gate} quick={args.quick}"
     )
     print("  Note: this is NOT a full Kilo emulator.")
+    print("  sampling: temperature=0 top_p=1.0 enable_thinking=false")
+    _self_check()
 
     report = Report()
     connected = True
