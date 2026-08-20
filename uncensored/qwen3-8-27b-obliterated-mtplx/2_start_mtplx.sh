@@ -304,7 +304,7 @@ echo "→ Profile:  ${PROFILE}"
 echo "→ MTP depth: D${DEPTH}"
 echo "→ Port:     ${PORT}"
 echo "→ API:      http://localhost:${PORT}/v1"
-echo "→ Sampling: temperature=0 (model card: greedy; temps >0.5 degrade)"
+echo "→ Sampling: temperature=0 frequency_penalty=0.2 reasoning=off (OBLITERATUS card)"
 echo ""
 echo "→ Starting mtplx serve ..."
 echo ""
@@ -317,6 +317,7 @@ SERVE_CMD=(
     --depth "${DEPTH}"
     --default-temperature 0
     --default-top-p 1.0
+    --default-frequency-penalty 0.2
     --reasoning off
     --model-id "${MODEL_ALIAS}"
 )

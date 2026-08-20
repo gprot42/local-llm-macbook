@@ -11,7 +11,8 @@ Usage:
   python3 test_harness.py --quick    # skip slower multi-turn / concurrent tests
   python3 test_harness.py --model qwen3.8-27b-obliterated-mtplx
 
-Sampling matches the OBLITERATUS card: temperature=0, top_p=1.0, thinking off.
+Sampling matches the OBLITERATUS card: temperature=0, top_p=1.0,
+thinking off, frequency_penalty=0.2 (mtplx stand-in for HF repetition_penalty=1.15).
 We do NOT fully emulate Kilo (no session DB, compaction UI, permissions).
 
 Exit codes:
@@ -35,9 +36,12 @@ from urllib.parse import urlparse
 
 DEFAULT_BASE = "http://127.0.0.1:8767"
 DEFAULT_MODEL = "qwen3.8-27b-obliterated-mtplx"
-# OBLITERATUS card: greedy. Temps above 0.5 degrade; thinking burns the budget.
+# OBLITERATUS card (HF): greedy, no thinking, empty system, no top_p/top_k.
+# repetition_penalty=1.15 is essential against import/boilerplate loops.
+# mtplx has no that flag — OpenAI frequency_penalty=0.2 is this stack's mapping.
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_TOP_P = 1.0
+DEFAULT_FREQUENCY_PENALTY = 0.2
 
 TOOLS = [
     {
@@ -155,10 +159,11 @@ def _sample_fields(
     temperature: float = DEFAULT_TEMPERATURE,
     extra: dict | None = None,
 ) -> dict[str, Any]:
-    """Card sampling: greedy, no thinking. extra wins on collisions."""
+    """Card sampling: greedy, no thinking, HF 1.15 via frequency_penalty."""
     body: dict[str, Any] = {
         "temperature": temperature,
         "top_p": DEFAULT_TOP_P,
+        "frequency_penalty": DEFAULT_FREQUENCY_PENALTY,
         "enable_thinking": False,
     }
     if extra:
@@ -771,6 +776,7 @@ def _self_check() -> None:
     sample = _sample_fields()
     assert sample["temperature"] == 0.0, sample
     assert sample["top_p"] == 1.0, sample
+    assert sample["frequency_penalty"] == 0.2, sample
     assert sample["enable_thinking"] is False, sample
     assert _content({"content": "PING"}) == "PING"
     assert _content({"content": [{"type": "text", "text": "PING"}]}) == "PING"
@@ -809,7 +815,10 @@ def main(argv: list[str] | None = None) -> int:
         f"gate={args.gate} quick={args.quick}"
     )
     print("  Note: this is NOT a full Kilo emulator.")
-    print("  sampling: temperature=0 top_p=1.0 enable_thinking=false")
+    print(
+        "  sampling: temperature=0 top_p=1.0 frequency_penalty=0.2 "
+        "enable_thinking=false"
+    )
     _self_check()
 
     report = Report()

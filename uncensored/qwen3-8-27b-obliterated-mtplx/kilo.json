@@ -4,11 +4,13 @@
   "agent": {
     "build": {
       "temperature": 0,
-      "top_p": 1.0
+      "top_p": 1.0,
+      "frequency_penalty": 0.2
     },
     "plan": {
       "temperature": 0,
-      "top_p": 1.0
+      "top_p": 1.0,
+      "frequency_penalty": 0.2
     }
   },
   "permission": {

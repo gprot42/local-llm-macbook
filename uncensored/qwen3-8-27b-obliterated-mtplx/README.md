@@ -83,14 +83,14 @@ The OBLITERATUS card says these settings matter:
 | setting | this stack | why |
 |---------|------------|-----|
 | **temperature** | **0** | greedy; temps above 0.5 degrade quality |
-| **top_p / top_k** | unused (`top_p=1.0`) | greedy + mtplx loop-guard; sampling not needed |
+| **repetition_penalty** | mtplx **`frequency_penalty=0.2`** | card 1.15 is essential vs import loops; mtplx has no `repetition_penalty` flag |
+| **top_p / top_k** | unused (`top_p=1.0`) | greedy; sampling not needed |
 | **enable_thinking** | **off** (`--reasoning off`) | thinking burns token budget |
 | **system prompt** | Kilo still sends its agent prompt | card prefers empty for refusal-sensitive chat; Kilo tools need a harness |
+| **max_new_tokens** | card **≥ 2048** for long answers | harness smoke tests stay short |
 
-HF `repetition_penalty=1.15` is **not** an mtplx CLI flag. mtplx uses its own
-loop-guard / presence+frequency penalties. If greedy decode loops on imports,
-try a small `--default-frequency-penalty` (e.g. `0.2`) on `2_start_mtplx.sh`
-or pass it per request.
+`2_start_mtplx.sh` and `test_harness.py` send `frequency_penalty=0.2` as the
+mtplx mapping of HF `repetition_penalty=1.15`.
 
 ## Harness
 
