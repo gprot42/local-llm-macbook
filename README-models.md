@@ -14,6 +14,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 |-------|--------|-------|-------|
 | **Qwen 3.6 27B mtplx** | `censored/qwen3-6-27b-coder-mtplx/` | **Text only** | Coding default; native MTP heads |
 | **Qwen 3.8 27B mtplx** | `censored/qwen3-8-27b-coder-mtplx/` | **Text only** | Next 27B; harness ready; weights when published |
+| **Qwen 3.8 27B OBLITERATED mtplx** | `uncensored/qwen3-8-27b-obliterated-mtplx/` | **Text only** | Uncensored 27B; mlx-4bit ~14 GB; MTP heads present |
 | **Muse Glimmer 30B** | `censored/muse-glimmer-30b-mlx/` | **Text + image** | Meta MSL agentic 30B; mlx-vlm + official DFlash |
 | **DeepSeek V4 Flash ds4** | `censored/deepseek-v4-flash-ds4/` | **Text only** | Native Metal GGUF |
 | **DeepSeek V4 Flash MLX** | `censored/deepseek-v4-flash-2bit-dq-mlx/` | **Text only** | mlx-lm community path |
@@ -59,6 +60,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 | Aligned local agents + screenshots | **Muse Glimmer 30B** (`:8087`) | Ultra-snappy loops (thinking is always on) |
 | Hard multi-file coding quality | **DeepSeek V4 Flash ds4** (`:8083`) | ≤64 GB machines; co-loading another 70+ GB model |
 | Uncensored chat (Gemma + vision) | **Gemma Heretic** or **JANG CRACK** (`:8080`) | Unattended huge agent refactors |
+| Uncensored Qwen 3.8 27B (MTP) | **Qwen 3.8 OBLITERATED** (`:8767`) | Aligned refusals; co-loading aligned 3.8 on tight RAM |
 | Uncensored dense Qwen | **Qwen3-32B Heretic** (`:8084`) | Expecting Qwen3.6 / MTP speed |
 | Uncensored big MoE (quality) | **Qwen3.5-122B Abliterated** (`:8085`) | RAM ≪ 128 GB; snappy loops |
 | Uncensored 122B **fast decode** (🟡 flaky agents) | **Qwen3.5-122B DFlash** (`:8086`) | Long Kilo agent loops; prefill-heavy short turns; vision |
@@ -261,6 +263,32 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 ---
 
 ## Uncensored
+
+### Qwen 3.8 27B OBLITERATED — mtplx (`uncensored/qwen3-8-27b-obliterated-mtplx/`)
+
+| | |
+|--|--|
+| **Role** | 🟢 Uncensored Qwen 3.8 27B (OBLITERATUS, mtplx MTP) |
+| **Modality** | **Text only** |
+| **Engine / size** | mtplx + built-in MTP heads · ~14 GB MLX 4-bit (`mlx-4bit/`) |
+| **HF** | [`OBLITERATUS/Qwen3.8-27B-OBLITERATED`](https://huggingface.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED) (snapshot **only** `mlx-4bit/` — do not `mtplx pull` the full repo) |
+| **API** | `:8767/v1` · Kilo: `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` |
+| **Harness** | `test_harness.py` (`--gate` on post-start) |
+| **Sampling** | `temperature=0` (greedy; model card) |
+
+**Good for**
+
+- Uncensored Qwen 3.8 27B with the same mtplx MTP loop as aligned 3.8
+- Local-first / research use of a refusal-removed 27B on Apple Silicon
+- Machines that already run Qwen 3.6/3.8 4-bit (~14–18 GB)
+
+**Not good for**
+
+- Aligned / refusal-preserving coding (use `censored/qwen3-8-27b-coder-mtplx/`)
+- Pulling the Hub repo as a whole (GGUF + bf16 ≈ 270 GB)
+- Co-loading aligned Qwen 3.8 on tight RAM (same size class)
+
+---
 
 ### Gemma 4 31B Heretic (`uncensored/gemma4-server-heretic-31b-mlx/`)
 

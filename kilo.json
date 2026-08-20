@@ -184,6 +184,26 @@
         }
       }
     },
+    "mtplx-qwen38-obl": {
+      "name": "mtplx Qwen3.8 OBLITERATED (local MTP)",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://localhost:8767/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "qwen3.8-27b-obliterated-mtplx": {
+          "name": "Qwen3.8 27B OBLITERATED \u2014 mtplx MTP (uncensored)",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        }
+      }
+    },
     "muse-glimmer": {
       "name": "Muse Glimmer 30B (mlx-vlm, local)",
       "options": {

@@ -70,6 +70,8 @@ weights/
 **/muse-glimmer-30b-mlx/mlx-community--muse-glimmer-30b-*/
 **/muse-glimmer-30b-mlx/meta-models--muse-glimmer-30b*
 # Uncensored Qwen HF checkouts (weights + tokenizer; download via 1_setup_download.sh)
+**/qwen3-8-27b-obliterated-mtplx/models/
+**/qwen3-8-27b-obliterated-mtplx/.mtplx_config
 **/qwen3-32b-heretic-mlx/qwen3-32b-heretic-mlx-5bit/
 **/qwen3-32b-heretic-mlx/.qwen3_heretic_config
 **/qwen3.5-122b-a10b-abliterated-mlx/qwen3.5-122b-a10b-abliterated-mlx-4bit/
