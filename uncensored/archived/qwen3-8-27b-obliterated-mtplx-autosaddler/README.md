@@ -24,7 +24,7 @@ and retargeted at the OBLITERATUS Hub pack.
 ## Quick start
 
 ```bash
-cd uncensored/qwen3-8-27b-obliterated-mtplx
+cd uncensored/archived/qwen3-8-27b-obliterated-mtplx-autosaddler
 
 # once
 ./1_setup_download.sh          # V3 bf16 → mlx-4bit (~14 GB)

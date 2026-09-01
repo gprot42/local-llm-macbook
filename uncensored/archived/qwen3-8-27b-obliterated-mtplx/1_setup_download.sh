@@ -309,7 +309,7 @@ echo "  (GGUF + leftover 18-shard + bf16 — hundreds of GB; GGUF V3 was re-uplo
 echo "   after a broken conversion. This stack converts V3 bf16 locally.)"
 echo ""
 
-SIBLING_AUTOSADDLER="$(cd "${SCRIPT_DIR}/.." && pwd)/archived/qwen3-8-27b-obliterated-mtplx-autosaddler"
+SIBLING_AUTOSADDLER="$(cd "${SCRIPT_DIR}/.." && pwd)/qwen3-8-27b-obliterated-mtplx-autosaddler"
 SIBLING_MLX="${SIBLING_AUTOSADDLER}/models/${MLX_SUBDIR}"
 SIBLING_BF16="${SIBLING_AUTOSADDLER}/models/bf16-v3"
 

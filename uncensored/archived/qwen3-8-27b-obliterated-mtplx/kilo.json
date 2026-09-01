@@ -52,7 +52,7 @@
   },
   "provider": {
     "mtplx-qwen38-obl": {
-      "name": "mtplx Qwen3.8 OBLITERATED (local MTP)",
+      "name": "mtplx Qwen3.8 OBLITERATED (archived, unstable)",
       "options": {
         "apiKey": "local",
         "baseURL": "http://127.0.0.1:8768/v1",
@@ -62,7 +62,7 @@
       },
       "models": {
         "qwen3.8-27b-obliterated-mtplx": {
-          "name": "Qwen3.8 27B OBLITERATED — mtplx MTP (uncensored)",
+          "name": "Qwen3.8 27B OBLITERATED — mtplx MTP (archived, unstable)",
           "tool_call": true,
           "limit": {
             "context": 131072,

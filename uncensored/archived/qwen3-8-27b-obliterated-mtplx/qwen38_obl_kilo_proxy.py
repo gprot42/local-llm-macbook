@@ -21,10 +21,14 @@ This proxy sits in front of mtplx and:
      cat/head files). Do not rewrite cd/&&, env=value ./script, which, pipes,
      or 2>/dev/null — those were causing the agent to stop after dummy ls/head
   8. Response-side early-stop: after a tool result, if the model dumps a
-     Next-steps/plan with no tool_calls, retry once with a user nudge
-     (mtplx only accepts tool_choice auto|none — do not send required).
-     If it still will not call a tool, synthesize one from the plan
-     (e.g. ./tools/*.sh) so Kilo cannot end the turn on a recap.
+     Next-steps/plan with no tool_calls, retry once (mtplx: tool_choice
+     auto|none only). Synthesize a plan script at most once; never repeat
+     a command already in history. After-tool JIT nudges cap at 3 tool
+     rounds since the last user message, then the nudge is stripped so
+     the model can recap and stop.
+  9. Serialize chat generations and drop client session-affinity headers.
+     mtplx raises 409 "session … already in flight" when Kilo retries the
+     same sticky session while a stream is still running; retry that 409.
 
 
 Usage:
@@ -40,6 +44,7 @@ import logging
 import re
 import sys
 import threading
+import time
 from collections import Counter
 from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -152,13 +157,34 @@ _RETRY_USER = (
     "[Harness] EARLY STOP: emit tool_calls for the next unfinished step now. "
     "No Next steps list. No recap. Run the next command."
 )
-_USER_ACTION_RE = re.compile(
-    r"(?is)\b(?:continue|keep going|do it|run it|go ahead|"
-    r"keep (?:working|going)|finish|research)\b"
-)
 _PLAN_SCRIPT_RE = re.compile(
     r"(?:ONEPHONE_I_CONFIRM=1\s+)?(?:\./)?tools/[\w.-]+\.sh"
 )
+# Cap runaway tool loops: JIT continue only for the first N tools after
+# the last real user message; force a Next-steps retry at most once.
+AFTER_TOOL_NUDGE_MAX = 3
+EARLY_STOP_FORCE_MAX = 1
+_UPSTREAM_GEN_LOCK = threading.RLock()
+_IN_FLIGHT_RE = re.compile(r"already in flight", re.I)
+_SESSION_HEADER_DROP = frozenset(
+    {
+        "x-mtplx-session-id",
+        "x-session-affinity",
+        "x-session-id",
+        "x-openwebui-chat-id",
+        "x-openwebui-user-id",
+    }
+)
+_SESSION_BODY_DROP = (
+    "user",
+    "session_id",
+    "mtplx_session_id",
+    "chat_id",
+    "conversation_id",
+)
+_IN_FLIGHT_RETRIES = 4
+# Don't sit on a silent prefill for 15 minutes (Kilo "Thinking 10m+").
+UPSTREAM_TIMEOUT = 180
 _PROXY_EMPTY_HINT = "[proxy] Command printed nothing"
 _CMD_SUB_RE = re.compile(r"`|\$\(")
 _SAFE_BASH_STARTS = (
@@ -444,6 +470,41 @@ def _nudge_system(messages: list[dict], marker: str, nudge: str, log_tag: str) -
     return True
 
 
+def _strip_nudge(messages: list[dict], nudge: str) -> None:
+    needle = (nudge or "").strip()
+    if not needle:
+        return
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "system":
+            continue
+        text = _message_text(msg)
+        if needle not in text and nudge not in text:
+            continue
+        cleaned = text.replace(nudge, "").replace(needle, "")
+        _set_message_text(msg, cleaned)
+
+
+def _is_harness_user(msg: dict) -> bool:
+    text = _message_text(msg)
+    return "[Harness] EARLY STOP:" in text
+
+
+def _tool_rounds_since_user(messages: list[dict] | None) -> int:
+    """Tool results after the last real (non-harness) user message."""
+    n = 0
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role == "user":
+            if _is_harness_user(msg):
+                continue
+            break
+        if role in ("tool", "function"):
+            n += 1
+    return n
+
+
 def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
     """Scoped AutoSaddler middleware: empty-tool, fake-action, prose-loop, JIT continue.
 
@@ -490,17 +551,20 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
             f"empty-tool recovery (streak={streak})",
         ):
             trace["empty_tool_recovery"] = True
-    elif (
-        last_role in ("tool", "function")
-        and cfg.get("mw_after_tool", True)
-        and _nudge_system(
-            messages,
-            "[Harness] Tool result received.",
-            _AFTER_TOOL_NUDGE,
-            "after-tool continue",
-        )
-    ):
-        trace["after_tool_continue"] = True
+    elif last_role in ("tool", "function") and cfg.get("mw_after_tool", True):
+        rounds = _tool_rounds_since_user(messages)
+        after_max = int(cfg.get("after_tool_nudge_max") or AFTER_TOOL_NUDGE_MAX)
+        if rounds <= after_max:
+            _nudge_system(
+                messages,
+                "[Harness] Tool result received.",
+                _AFTER_TOOL_NUDGE,
+                "after-tool continue",
+            )
+            trace["after_tool_continue"] = True
+        else:
+            _strip_nudge(messages, _AFTER_TOOL_NUDGE)
+            log.info("[agent] after-tool cap rounds=%s max=%s", rounds, after_max)
     if fake and cfg.get("mw_fake_action", True) and _nudge_system(
         messages,
         "[Harness] FAKE ACTION:",
@@ -1120,22 +1184,18 @@ def _json_text_and_tools(payload: bytes) -> tuple[str, bool]:
     return "".join(parts), saw_tool
 
 
-def _last_user_wants_action(messages: list[dict] | None) -> bool:
-    for msg in reversed(messages or []):
-        if not isinstance(msg, dict) or msg.get("role") != "user":
-            continue
-        return bool(_USER_ACTION_RE.search(_message_text(msg)[:500]))
-    return False
-
-
 def _should_force_continue(
     text: str, has_tools: bool, messages: list[dict] | None
 ) -> bool:
     if has_tools:
         return False
+    rounds = _tool_rounds_since_user(messages)
+    max_force = int(
+        _active_harness().get("early_stop_force_max") or EARLY_STOP_FORCE_MAX
+    )
+    if rounds > max_force:
+        return False
     if _is_early_stop_plan(text, False):
-        return True
-    if _last_user_wants_action(messages) and len((text or "").strip()) >= 24:
         return True
     return not (text or "").strip()
 
@@ -1166,17 +1226,47 @@ def _make_tool_call(name: str, args: dict) -> dict:
     }
 
 
+def _recent_bash_commands(messages: list[dict] | None) -> set[str]:
+    found: set[str] = set()
+    for msg in messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        tcs = msg.get("tool_calls")
+        if not isinstance(tcs, list):
+            continue
+        for tc in tcs:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+            if not isinstance(fn, dict):
+                continue
+            raw = fn.get("arguments") or "{}"
+            parsed: dict | None = None
+            if isinstance(raw, dict):
+                parsed = raw
+            elif isinstance(raw, str):
+                try:
+                    loaded = json.loads(raw)
+                    if isinstance(loaded, dict):
+                        parsed = loaded
+                except json.JSONDecodeError:
+                    parsed = None
+            if parsed and parsed.get("command"):
+                found.add(str(parsed["command"]).strip())
+    return found
+
+
 def _synthetic_tool_calls(
     text: str, messages: list[dict] | None
 ) -> list[dict]:
     cmd = _command_from_plan(text)
-    if cmd:
-        cmd = _sanitize_bash_command(cmd, messages)
-        return [_make_tool_call("bash", {"command": cmd})]
-    for path in ("AGENTS.md", "analysis/CONTINUE.md", "README.md", "COMPLETE.md"):
-        if _workspace_entry_exists(path, messages) is True:
-            return [_make_tool_call("bash", {"command": f"head -80 {path}"})]
-    return [_make_tool_call("bash", {"command": "ls"})]
+    if not cmd:
+        return []
+    cmd = _sanitize_bash_command(cmd, messages)
+    if cmd in _recent_bash_commands(messages):
+        log.info("[agent] skip duplicate synthetic %s", cmd[:80])
+        return []
+    return [_make_tool_call("bash", {"command": cmd})]
 
 
 def _payload_ids(raw: bytes, *, sse: bool) -> tuple[str, str]:
@@ -1223,6 +1313,44 @@ def _sse_tool_payload(tcs: list[dict], model: str, response_id: str) -> bytes:
         f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
         "data: [DONE]\n\n"
     ).encode("utf-8")
+
+
+def _is_chat_path(path: str) -> bool:
+    p = (path or "").rstrip("/")
+    return p.endswith("/chat/completions") or p.endswith("/messages")
+
+
+def _drop_session_headers(headers: dict[str, str]) -> dict[str, str]:
+    return {
+        k: v
+        for k, v in headers.items()
+        if k.lower() not in _SESSION_HEADER_DROP
+    }
+
+
+def _scrub_session_body(data: dict) -> bool:
+    changed = False
+    for key in _SESSION_BODY_DROP:
+        if key in data:
+            data.pop(key, None)
+            changed = True
+    meta = data.get("metadata")
+    if isinstance(meta, dict):
+        for key in _SESSION_BODY_DROP:
+            if key in meta:
+                meta.pop(key, None)
+                changed = True
+    return changed
+
+
+def _is_in_flight_error(status: int, payload: bytes) -> bool:
+    if status not in {409, 429, 500, 503}:
+        return False
+    try:
+        blob = payload.decode("utf-8", errors="replace")
+    except Exception:
+        return False
+    return bool(_IN_FLIGHT_RE.search(blob))
 
 
 def _json_tool_payload(tcs: list[dict], model: str, response_id: str) -> bytes:
@@ -1525,8 +1653,15 @@ class ProxyState:
 
 def _connect(state: ProxyState) -> HTTPConnection:
     if state.scheme == "https":
-        return HTTPSConnection(state.host, state.port, timeout=900)
-    return HTTPConnection(state.host, state.port, timeout=900)
+        return HTTPSConnection(state.host, state.port, timeout=UPSTREAM_TIMEOUT)
+    return HTTPConnection(state.host, state.port, timeout=UPSTREAM_TIMEOUT)
+
+
+def _needs_buffered_sse(steer_trace: dict[str, Any]) -> bool:
+    return bool(
+        steer_trace.get("after_tool_continue")
+        and _active_harness().get("mw_early_stop", True)
+    )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1583,7 +1718,7 @@ class Handler(BaseHTTPRequestHandler):
             return b""
         return self.rfile.read(n)
 
-    def _upstream_once(
+    def _upstream_raw(
         self, path: str, body: bytes, headers: dict[str, str]
     ) -> tuple[int, dict[str, str], str, bytes]:
         conn = _connect(self.state)
@@ -1602,6 +1737,71 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+    def _upstream_once(
+        self, path: str, body: bytes, headers: dict[str, str]
+    ) -> tuple[int, dict[str, str], str, bytes]:
+        chat = _is_chat_path(path)
+        if chat:
+            _UPSTREAM_GEN_LOCK.acquire()
+        try:
+            last: tuple[int, dict[str, str], str, bytes] | None = None
+            attempts = _IN_FLIGHT_RETRIES if chat else 1
+            for attempt in range(attempts):
+                last = self._upstream_raw(path, body, headers)
+                if chat and _is_in_flight_error(last[0], last[3]):
+                    log.info(
+                        "[agent] session already in flight (try %s/%s)",
+                        attempt + 1,
+                        attempts,
+                    )
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                return last
+            assert last is not None
+            return last
+        finally:
+            if chat:
+                _UPSTREAM_GEN_LOCK.release()
+
+    def _stream_passthrough(
+        self, path: str, body: bytes, headers: dict[str, str]
+    ) -> None:
+        """Forward SSE as it arrives so Kilo is not stuck on Thinking."""
+        chat = _is_chat_path(path)
+        if chat:
+            _UPSTREAM_GEN_LOCK.acquire()
+        conn = _connect(self.state)
+        try:
+            conn.request(self.command, path, body=body, headers=headers)
+            resp = conn.getresponse()
+            self.send_response(resp.status)
+            for k, v in resp.getheaders():
+                if k.lower() in (
+                    "transfer-encoding",
+                    "connection",
+                    "content-length",
+                    "content-encoding",
+                ):
+                    continue
+                self.send_header(k, v)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            while True:
+                chunk = resp.read(4096)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            log.info("client disconnected mid-stream")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            if chat:
+                _UPSTREAM_GEN_LOCK.release()
+
     def _proxy(self) -> None:
         body = self._read_body()
         headers = {
@@ -1615,6 +1815,7 @@ class Handler(BaseHTTPRequestHandler):
                 "connection",
                 "accept-encoding",
             )
+            and k.lower() not in _SESSION_HEADER_DROP
         }
 
         path = self.path
@@ -1629,6 +1830,8 @@ class Handler(BaseHTTPRequestHandler):
                 data = None
             if isinstance(data, dict):
                 parsed = data
+                if _scrub_session_body(data):
+                    log.info("[agent] stripped client session affinity")
                 stream = bool(data.get("stream"))
                 if path.rstrip("/").endswith("/chat/completions") or path.rstrip(
                     "/"
@@ -1662,6 +1865,10 @@ class Handler(BaseHTTPRequestHandler):
         headers["Connection"] = "close"
 
         try:
+            if stream and not _needs_buffered_sse(steer_trace):
+                log.info("[agent] sse passthrough")
+                self._stream_passthrough(path, body, headers)
+                return
             status, resp_headers, content_type, payload = self._upstream_once(
                 path, body, headers
             )
@@ -1685,13 +1892,17 @@ class Handler(BaseHTTPRequestHandler):
                     text, has_tools = _sse_text_and_tools(payload)
                     if _should_force_continue(text, has_tools, steer_messages):
                         tcs = _synthetic_tool_calls(text, steer_messages)
-                        model, rid = _payload_ids(payload, sse=is_sse)
-                        log.info(
-                            "[agent] synthetic continue %s %s",
-                            tcs[0]["function"]["name"],
-                            tcs[0]["function"]["arguments"][:80],
-                        )
-                        payload = _sse_tool_payload(tcs, model, rid)
+                        if tcs:
+                            model, rid = _payload_ids(payload, sse=is_sse)
+                            log.info(
+                                "[agent] synthetic continue %s %s",
+                                tcs[0]["function"]["name"],
+                                tcs[0]["function"]["arguments"][:80],
+                            )
+                            payload = _sse_tool_payload(tcs, model, rid)
+                        else:
+                            log.info("[agent] early-stop cap: letting recap through")
+                            payload = _repair_sse_payload(payload, steer_messages)
                     else:
                         payload = _repair_sse_payload(payload, steer_messages)
                 else:
@@ -1717,13 +1928,16 @@ class Handler(BaseHTTPRequestHandler):
                     text, has_tools = _json_text_and_tools(payload)
                     if _should_force_continue(text, has_tools, steer_messages):
                         tcs = _synthetic_tool_calls(text, steer_messages)
-                        model, rid = _payload_ids(payload, sse=False)
-                        log.info(
-                            "[agent] synthetic continue %s %s",
-                            tcs[0]["function"]["name"],
-                            tcs[0]["function"]["arguments"][:80],
-                        )
-                        payload = _json_tool_payload(tcs, model, rid)
+                        if tcs:
+                            model, rid = _payload_ids(payload, sse=False)
+                            log.info(
+                                "[agent] synthetic continue %s %s",
+                                tcs[0]["function"]["name"],
+                                tcs[0]["function"]["arguments"][:80],
+                            )
+                            payload = _json_tool_payload(tcs, model, rid)
+                        else:
+                            log.info("[agent] early-stop cap: letting recap through")
 
             self.send_response(status)
             for k, v in resp_headers.items():
@@ -1739,6 +1953,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+        except BrokenPipeError:
+            log.info("client disconnected (broken pipe)")
         except Exception as exc:
             log.exception("upstream error: %s", exc)
             try:
@@ -1866,6 +2082,46 @@ def _self_check() -> None:
     assert "[Harness] Tool result received." in useful_tool["messages"][0]["content"]
     assert "[Harness] EMPTY TOOL RESULT:" not in useful_tool["messages"][0]["content"]
 
+    cap_msgs: list[dict] = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "proceed with the research"},
+    ]
+    for i in range(1, 5):
+        cap_msgs.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": '{"command":"ls"}',
+                        },
+                    }
+                ],
+            }
+        )
+        cap_msgs.append(
+            {"role": "tool", "tool_call_id": f"c{i}", "content": "ok"}
+        )
+    cap_body = {
+        "tools": [{"type": "function", "function": {"name": "bash"}}],
+        "messages": cap_msgs,
+        "max_tokens": 128,
+    }
+    # First inject the JIT nudge (as if round 1 already happened), then
+    # prepare the 4-tool history so the cap strips it.
+    cap_msgs[0]["content"] += _AFTER_TOOL_NUDGE
+    tr_cap: dict[str, Any] = {}
+    prepare_body(cap_body, tr_cap)
+    assert tr_cap.get("after_tool_continue") is False, tr_cap
+    assert "[Harness] Tool result received." not in cap_body["messages"][0]["content"]
+    assert _tool_rounds_since_user(cap_msgs) == 4
+    plan = "Next steps\nE1 ecall 0x49 — one next RE probe on host wrapper.\n"
+    assert _should_force_continue(plan, False, cap_msgs) is False
+
     fake_body = {
         "tools": [{"type": "function", "function": {"name": "bash"}}],
         "messages": [
@@ -1957,6 +2213,27 @@ def _self_check() -> None:
     syn = _synthetic_tool_calls(plan_cmd, None)
     assert syn[0]["function"]["name"] == "bash"
     assert "tx_tail_one_phone.sh" in syn[0]["function"]["arguments"]
+    already = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "bash",
+                        "arguments": json.dumps(
+                            {
+                                "command": (
+                                    "ONEPHONE_I_CONFIRM=1 "
+                                    "./tools/tx_tail_one_phone.sh"
+                                )
+                            }
+                        ),
+                    }
+                }
+            ],
+        }
+    ]
+    assert _synthetic_tool_calls(plan_cmd, already) == []
     retry_body = {
         "tool_choice": "auto",
         "messages": [{"role": "system", "content": "agent"}],
@@ -1983,6 +2260,31 @@ def _self_check() -> None:
         junk,
         [{"role": "user", "content": f"Current Workspace Directory ({ws})"}],
     ) == "README.md"
+    dropped = _drop_session_headers(
+        {"X-Session-Id": "ses_abc", "Authorization": "local", "Content-Type": "application/json"}
+    )
+    assert "X-Session-Id" not in dropped
+    assert dropped.get("Authorization") == "local"
+    body_sid = {
+        "user": "kilo",
+        "session_id": "ses_abc",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"session_id": "ses_abc"},
+    }
+    assert _scrub_session_body(body_sid) is True
+    assert "user" not in body_sid
+    assert "session_id" not in body_sid
+    assert "session_id" not in body_sid["metadata"]
+    assert body_sid["messages"][0]["content"] == "hi"
+    busy = json.dumps(
+        {"error": {"message": "session ses_fa290ee49ffeuGnXskKEfH3z3m is already in flight"}}
+    ).encode()
+    assert _is_in_flight_error(409, busy) is True
+    assert _is_in_flight_error(200, busy) is False
+    assert _is_chat_path("/v1/chat/completions") is True
+    assert UPSTREAM_TIMEOUT <= 180
+    assert _needs_buffered_sse({"after_tool_continue": False}) is False
+    assert _needs_buffered_sse({"after_tool_continue": True}) is True
 
 
 def main(argv: list[str] | None = None) -> int:

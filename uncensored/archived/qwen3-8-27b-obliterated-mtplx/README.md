@@ -1,5 +1,7 @@
 # Qwen3.8-27B OBLITERATED V3 — mtplx MTP Server + harness
 
+**Status: 📦 archived / 🟡 unstable.** Kilo agent loops hang (session-in-flight, 10+ min Thinking spinner, Next-steps recap loops). Not recommended as a daily driver.
+
 Uncensored **Qwen3.8-27B V3** via [OBLITERATUS](https://huggingface.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED)
 (weight-space refusal removal of [`Qwen/Qwen3.8-27B`](https://huggingface.co/Qwen/Qwen3.8-27B)),
 served locally on Apple Silicon with [mtplx](https://github.com/youssofal/MTPLX)
@@ -10,7 +12,7 @@ Do **not** load two large models at once on ≤128 GB unified memory.
 Do **not** start this stack and the archived AutoSaddler copy together — they share `:8767`/`:8768`.
 
 Production stack (no AutoSaddler daemon). Copied from
-[`archived/qwen3-8-27b-obliterated-mtplx-autosaddler/`](../archived/qwen3-8-27b-obliterated-mtplx-autosaddler/)
+[`qwen3-8-27b-obliterated-mtplx-autosaddler/`](../qwen3-8-27b-obliterated-mtplx-autosaddler/)
 and stripped of the EvoDAG optimizer. Setup will **symlink** a complete sibling
 `models/mlx-4bit` (or `bf16-v3`) instead of re-downloading ~56 GB.
 
@@ -27,7 +29,7 @@ and stripped of the EvoDAG optimizer. Setup will **symlink** a complete sibling
 ## Quick start
 
 ```bash
-cd uncensored/qwen3-8-27b-obliterated-mtplx
+cd uncensored/archived/qwen3-8-27b-obliterated-mtplx
 
 # once
 ./1_setup_download.sh          # V3 bf16 → mlx-4bit (~14 GB)
@@ -147,14 +149,14 @@ Paper results (for context, not this 27B): +9.0 / +9.6 / +10.0 pp on GAIA2,
 SWE-Bench Pro, Terminal-Bench 2.0 vs the base harness.
 
 The AutoSaddler EvoDAG optimizer is **not** in this folder. Use
-[`../archived/qwen3-8-27b-obliterated-mtplx-autosaddler/`](../archived/qwen3-8-27b-obliterated-mtplx-autosaddler/)
+[`../qwen3-8-27b-obliterated-mtplx-autosaddler/`](../qwen3-8-27b-obliterated-mtplx-autosaddler/)
 if you want `./2_start_mtplx.sh optimize`.
 
 ### What this stack does
 
 | Patch kind (AutoSaddler) | Here |
 |--------------------------|------|
-| Agent loop logic (capability) | Empty-tool recovery, fake-action recovery, prose-loop recovery, just-in-time continue after a tool result; if the model dumps Next-steps with no tool_calls, retry then synthesize the next bash/read so the turn cannot end on a recap |
+| Agent loop logic (capability) | Empty-tool recovery, fake-action recovery, prose-loop recovery; JIT continue for the first 3 tool rounds after the user, then the nudge is stripped; Next-steps dumps retry at most once and never re-run a synthetic command already in history |
 | Infra (capability) | Cap tool outputs at 30k chars; repair truncated tool-call JSON; bash-sanitize only *broken* commands (keep `cd && ./script`, `which`, pipes) |
 | Tool descriptions (steering) | Harness schemas say *when* to glob/grep/read vs bash |
 | Prompt (steering) | Short finish-the-job + verify-before-done in `kilo.json` (replacement, not stacked rules) |

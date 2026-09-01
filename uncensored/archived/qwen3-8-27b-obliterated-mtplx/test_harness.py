@@ -1231,6 +1231,93 @@ def run_unit_tests(report: Report) -> None:
         and "tx_tail_one_phone.sh" in syn[0]["function"]["arguments"],
         str(syn[0]["function"]["arguments"])[:80],
     )
+    already = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "bash",
+                        "arguments": json.dumps(
+                            {
+                                "command": (
+                                    "ONEPHONE_I_CONFIRM=1 "
+                                    "./tools/tx_tail_one_phone.sh"
+                                )
+                            }
+                        ),
+                    }
+                }
+            ],
+        }
+    ]
+    report.check(
+        "unit: skip duplicate synthetic tx_tail",
+        proxy._synthetic_tool_calls(plan_cmd, already) == [],
+        "empty",
+    )
+    cap_msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "proceed with the research"},
+    ]
+    for i in range(1, 5):
+        cap_msgs.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "function": {
+                            "name": "bash",
+                            "arguments": '{"command":"ls"}',
+                        },
+                    }
+                ],
+            }
+        )
+        cap_msgs.append({"role": "tool", "tool_call_id": f"c{i}", "content": "ok"})
+    cap_msgs[0]["content"] += proxy._AFTER_TOOL_NUDGE
+    cap_body = {
+        "tools": [{"type": "function", "function": {"name": "bash"}}],
+        "messages": cap_msgs,
+        "max_tokens": 128,
+    }
+    tr_cap: dict = {}
+    proxy.prepare_body(cap_body, tr_cap)
+    report.check(
+        "unit: after-tool cap at 4 rounds",
+        tr_cap.get("after_tool_continue") is False
+        and "[Harness] Tool result received."
+        not in cap_body["messages"][0]["content"],
+        str(tr_cap.get("after_tool_continue")),
+    )
+    report.check(
+        "unit: no force-continue after cap",
+        proxy._should_force_continue(plan, False, cap_msgs) is False,
+        str(proxy._tool_rounds_since_user(cap_msgs)),
+    )
+    dropped = proxy._drop_session_headers(
+        {"X-Session-Id": "ses_abc", "Authorization": "local"}
+    )
+    report.check(
+        "unit: drop x-session-id header",
+        "X-Session-Id" not in dropped and dropped.get("Authorization") == "local",
+        str(dropped),
+    )
+    busy = json.dumps(
+        {
+            "error": {
+                "message": "session ses_fa290ee49ffeuGnXskKEfH3z3m is already in flight"
+            }
+        }
+    ).encode()
+    report.check(
+        "unit: detect session already in flight",
+        proxy._is_in_flight_error(409, busy) is True
+        and proxy._is_in_flight_error(200, busy) is False,
+        "409",
+    )
     retry_body = {
         "tool_choice": "required",
         "messages": [{"role": "system", "content": "agent"}],
