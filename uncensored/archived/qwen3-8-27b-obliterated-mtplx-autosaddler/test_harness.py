@@ -1176,71 +1176,12 @@ def run_unit_tests(report: Report) -> None:
     proxy = _load_proxy()
     proxy._self_check()
     report.check("unit: proxy self-check", True, "sampling + scoped hooks")
-    broken = 'grep -rn "autohunt'
+    broken = 'grep -rn "autohunt\\|Autohunt" "analysis/semgrep-domain-c/*.md"'
     sanitized = proxy._sanitize_bash_command(broken)
     report.check(
         "unit: bash-sanitize unmatched grep quotes",
-        sanitized.startswith(("ls", "ls ", "head ")) and '"' not in sanitized.strip()[1:],
+        sanitized.startswith(("ls ", "head ")) and "autohunt\\\\" not in sanitized,
         sanitized,
-    )
-    ok_grep = 'grep -rn "autohunt\\|Autohunt" "analysis/semgrep-domain-c/*.md"'
-    kept_grep = proxy._sanitize_bash_command(ok_grep)
-    report.check(
-        "unit: bash-sanitize keeps valid grep with pipe",
-        kept_grep.startswith("grep -rn"),
-        kept_grep,
-    )
-    run = (
-        "cd /Users/aicoder/src/private/grapheneos-titan-m2 && "
-        "ONEPHONE_I_CONFIRM=1 ./tools/tx_tail_one_phone.sh"
-    )
-    kept_run = proxy._sanitize_bash_command(run)
-    report.check(
-        "unit: bash-sanitize keeps cd && script",
-        "./tools/tx_tail_one_phone.sh" in kept_run and not kept_run.startswith("head "),
-        kept_run,
-    )
-    which = 'which adb 2>/dev/null || echo "no adb"'
-    kept_which = proxy._sanitize_bash_command(which)
-    report.check(
-        "unit: bash-sanitize keeps which adb",
-        "which adb" in kept_which,
-        kept_which,
-    )
-    plan = "Next steps\nE1 ecall 0x49 — one next RE probe on host wrapper.\n"
-    report.check(
-        "unit: early-stop plan detected",
-        proxy._is_early_stop_plan(plan, False) is True
-        and proxy._is_early_stop_plan(plan, True) is False,
-        plan[:40],
-    )
-    plan_cmd = (
-        "Next steps\nS2/S3 TX-TAIL — ONEPHONE_I_CONFIRM=1 "
-        "./tools/tx_tail_one_phone.sh (multi-chunk)\n"
-    )
-    extracted = proxy._command_from_plan(plan_cmd)
-    report.check(
-        "unit: plan extracts tx_tail script",
-        extracted == "ONEPHONE_I_CONFIRM=1 ./tools/tx_tail_one_phone.sh",
-        extracted or "",
-    )
-    syn = proxy._synthetic_tool_calls(plan_cmd, None)
-    report.check(
-        "unit: synthetic continue is bash tx_tail",
-        syn[0]["function"]["name"] == "bash"
-        and "tx_tail_one_phone.sh" in syn[0]["function"]["arguments"],
-        str(syn[0]["function"]["arguments"])[:80],
-    )
-    retry_body = {
-        "tool_choice": "required",
-        "messages": [{"role": "system", "content": "agent"}],
-    }
-    proxy._apply_early_stop_retry(retry_body)
-    report.check(
-        "unit: early-stop retry stays tool_choice=auto",
-        retry_body["tool_choice"] == "auto"
-        and retry_body["messages"][-1]["role"] == "user",
-        str(retry_body["tool_choice"]),
     )
     missing = (
         "head: analysis/semgrep-domain-c/WALLET-DOMAIN-C-FINAL.md: "
@@ -1295,11 +1236,8 @@ def run_unit_tests(report: Report) -> None:
     try:
         import autosaddler as _as
 
-        if hasattr(_as, "_self_check"):
-            _as._self_check()
-            report.check("unit: autosaddler optimizer self-check", True, "evodag + patches")
-        else:
-            report.check("unit: autosaddler stub (no optimizer in this stack)", True, "load_active")
+        _as._self_check()
+        report.check("unit: autosaddler optimizer self-check", True, "evodag + patches")
     except Exception as e:
         report.check("unit: autosaddler optimizer self-check", False, str(e))
 
@@ -1615,11 +1553,16 @@ def main(argv: list[str] | None = None) -> int:
         pass
 
     if args.optimize:
-        report.check(
-            "optimize: not in this stack",
-            False,
-            "use ../qwen3-8-27b-obliterated-mtplx-autosaddler/ for EvoDAG",
-        )
+        connected = _probe(args.base)
+        report.check("optimize: server reachable", connected, args.base)
+        if connected:
+            import autosaddler as _as
+
+            _as.optimize(
+                base=args.base,
+                model=model,
+                iters=max(1, int(args.iters)),
+            )
     elif args.gate:
         connected = run_gate_tests(args.base, model, report)
     else:

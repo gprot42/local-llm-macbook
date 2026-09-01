@@ -26,7 +26,7 @@ Uncensored / abliterated **Qwen3-32B** (original **Qwen3** dense line, **not** Q
 ## Quick start
 
 ```bash
-cd uncensored/qwen3-32b-heretic-mlx
+cd uncensored/archived/qwen3-32b-heretic-mlx
 
 # 1. Create venv + download ~22.5 GB weights
 ./1_setup_download.sh

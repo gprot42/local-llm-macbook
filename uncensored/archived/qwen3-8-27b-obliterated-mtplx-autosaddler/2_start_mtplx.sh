@@ -12,7 +12,9 @@
 #   ./2_start_mtplx.sh restart     reload engine + proxy
 #   ./2_start_mtplx.sh check       smoke-check a server that is already up
 #   ./2_start_mtplx.sh check-agent longer train/dev tool-loop eval
+#   ./2_start_mtplx.sh optimize    AutoSaddler EvoDAG loop (persists under .autosaddler/)
 #   ./2_start_mtplx.sh stop | status
+#   --no-autosaddler-daemon        Do not start the hands-off optimize watcher
 #
 # Options:
 #   --port  PORT    Raw mtplx port (default: 8767)
@@ -46,10 +48,14 @@ DO_STOP=false
 DO_STATUS=false
 DO_CHECK=false
 DO_CHECK_AGENT=false
+DO_OPTIMIZE=false
 HARNESS_GATE=true
 USE_PROXY=true
+AUTOSADDLER_DAEMON=true
 PROXY_PY="${SCRIPT_DIR}/qwen38_obl_kilo_proxy.py"
 PROXY_PID=""
+DAEMON_PID_FILE="${SCRIPT_DIR}/.autosaddler/daemon.pid"
+DAEMON_LOG_FILE="${SCRIPT_DIR}/.autosaddler/daemon.log"
 
 stop_server_on_port() {
     local port="$1"
@@ -140,6 +146,53 @@ start_kilo_proxy() {
     exit 1
 }
 
+autosaddler_daemon_pid() {
+    if [[ -f "$DAEMON_PID_FILE" ]]; then
+        local pid
+        pid="$(tr -d '[:space:]' <"$DAEMON_PID_FILE" 2>/dev/null || true)"
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            echo "$pid"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+stop_autosaddler_daemon() {
+    local pid
+    pid="$(autosaddler_daemon_pid || true)"
+    if [[ -z "$pid" ]]; then
+        rm -f "$DAEMON_PID_FILE"
+        return 0
+    fi
+    echo "→ Stopping AutoSaddler daemon (pid ${pid})"
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$pid" 2>/dev/null || true
+    rm -f "$DAEMON_PID_FILE"
+}
+
+start_autosaddler_daemon() {
+    if [[ "${AUTOSADDLER_DAEMON}" != true || "${USE_PROXY}" != true ]]; then
+        return 0
+    fi
+    local existing
+    existing="$(autosaddler_daemon_pid || true)"
+    if [[ -n "$existing" ]]; then
+        echo "→ AutoSaddler daemon already running (pid ${existing})"
+        return 0
+    fi
+    mkdir -p "${SCRIPT_DIR}/.autosaddler"
+    local model
+    model="$(live_model_id)"
+    echo "→ Starting AutoSaddler daemon (hands-off optimize after 90s Kilo quiet)"
+    nohup python3 "${SCRIPT_DIR}/autosaddler.py" --daemon --iters 1 --idle 90 --poll 10 \
+        --base "http://127.0.0.1:$(public_port)" --model "${model}" \
+        >>"$DAEMON_LOG_FILE" 2>&1 &
+    echo $! >"$DAEMON_PID_FILE"
+    disown $! 2>/dev/null || true
+}
+
 run_harness() {
     # $1 = extra flags, e.g. "--gate" or "--gate --agent"
     local extra="${1:---gate}"
@@ -175,6 +228,7 @@ print_use_it() {
     echo "  That's it. Optional:"
     echo "    ./2_start_mtplx.sh check         # smoke"
     echo "    ./2_start_mtplx.sh check-agent   # longer loop eval"
+    echo "    ./2_start_mtplx.sh optimize      # one-shot EvoDAG (daemon does this hands-off)"
     echo "============================================================"
 }
 
@@ -191,6 +245,7 @@ while [[ $i -lt ${#args[@]} ]]; do
         status)       DO_STATUS=true;                        ((i+=1)) ;;
         check)        DO_CHECK=true;                         ((i+=1)) ;;
         check-agent)  DO_CHECK_AGENT=true;                   ((i+=1)) ;;
+        optimize)     DO_OPTIMIZE=true;                      ((i+=1)) ;;
         --port)    PORT="${args[$((i+1))]:-$PORT}";          ((i+=2)) ;;
         --proxy-port) PROXY_PORT="${args[$((i+1))]:-$PROXY_PORT}"; ((i+=2)) ;;
         --model)   MODEL_OVERRIDE="${args[$((i+1))]:-}";     ((i+=2)) ;;
@@ -200,6 +255,7 @@ while [[ $i -lt ${#args[@]} ]]; do
         --harness-gate)    HARNESS_GATE=true;                ((i+=1)) ;;
         --no-harness-gate) HARNESS_GATE=false;               ((i+=1)) ;;
         --no-proxy) USE_PROXY=false;                         ((i+=1)) ;;
+        --no-autosaddler-daemon) AUTOSADDLER_DAEMON=false;   ((i+=1)) ;;
         *) ((i+=1)) ;;
     esac
 done
@@ -229,6 +285,12 @@ if [[ "${DO_STATUS}" == true ]]; then
             | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data'][0]['id'])" 2>/dev/null || echo "?")"
         echo "→ Model ID:  ${model_id}"
         echo "→ API:       http://127.0.0.1:${pub}/v1"
+        dpid="$(autosaddler_daemon_pid || true)"
+        if [[ -n "$dpid" ]]; then
+            echo "→ Optimizer: AutoSaddler daemon pid ${dpid}"
+        else
+            echo "→ Optimizer: daemon not running"
+        fi
         exit 0
     fi
     echo "→ Health:    FAIL — public :${pub} /v1/models failed"
@@ -237,6 +299,7 @@ if [[ "${DO_STATUS}" == true ]]; then
 fi
 
 if [[ "${DO_STOP}" == true ]]; then
+    stop_autosaddler_daemon
     stop_server_on_port "${PROXY_PORT}"
     stop_server_on_port "${PORT}"
     echo "→ Stopped (engine :${PORT}, proxy :${PROXY_PORT})"
@@ -294,12 +357,10 @@ if [[ ! -d "${VENV_DIR}" ]]; then
     echo "ERROR: venv not found at ${VENV_DIR}. Run ./1_setup_download.sh first."
     exit 1
 fi
-export PATH="${VENV_DIR}/bin:${PATH}"
-hash -r 2>/dev/null || true
 source "${VENV_DIR}/bin/activate"
 
 # ── check / check-agent (server must already be up) ───────────────────────────
-if [[ "${DO_CHECK}" == true || "${DO_CHECK_AGENT}" == true ]]; then
+if [[ "${DO_CHECK}" == true || "${DO_CHECK_AGENT}" == true || "${DO_OPTIMIZE}" == true ]]; then
     pub="$(public_port)"
     if ! mtplx_healthy "${pub}" && ! mtplx_healthy "${PORT}"; then
         echo "ERROR: nothing is listening. Start it first:"
@@ -312,6 +373,7 @@ if [[ "${DO_CHECK}" == true || "${DO_CHECK_AGENT}" == true ]]; then
     fi
     extra="--gate"
     [[ "${DO_CHECK_AGENT}" == true ]] && extra="--gate --agent"
+    [[ "${DO_OPTIMIZE}" == true ]] && extra="--optimize --iters 3"
     run_harness "${extra}"
     exit $?
 fi
@@ -319,6 +381,7 @@ fi
 # ── Port conflict handling ────────────────────────────────────────────────────
 if [[ "${DO_RESTART}" == true ]]; then
     echo "→ restart: clearing engine :${PORT} and proxy :${PROXY_PORT} ..."
+    stop_autosaddler_daemon
     stop_server_on_port "${PROXY_PORT}"
     stop_server_on_port "${PORT}"
 elif mtplx_healthy "${PORT}"; then
@@ -331,6 +394,7 @@ elif mtplx_healthy "${PORT}"; then
     pub="$(public_port)"
     echo "→ API:      http://127.0.0.1:${pub}/v1"
     echo "→ Model ID: $(live_model_id)"
+    start_autosaddler_daemon
     if [[ "${HARNESS_GATE}" == true ]]; then
         run_harness "--gate" || true
     fi
@@ -423,6 +487,7 @@ MTPLX_PID=""
 cleanup() {
     echo ""
     echo "→ Shutting down OBLITERATED stack ..."
+    stop_autosaddler_daemon
     [[ -n "${PROXY_PID}" ]] && kill -TERM "${PROXY_PID}" 2>/dev/null || true
     [[ -n "${MTPLX_PID}" ]] && kill -TERM "${MTPLX_PID}" 2>/dev/null || true
     sleep 1
@@ -491,6 +556,7 @@ if [[ "${READY}" != true ]]; then
 fi
 
 start_kilo_proxy
+start_autosaddler_daemon
 
 echo ""
 echo "============================================================"

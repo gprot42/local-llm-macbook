@@ -259,26 +259,17 @@ else
     "${PYTHON}" -m venv "${VENV_DIR}"
 fi
 
-# Relocated venvs may have a stale VIRTUAL_ENV in bin/activate. Prefer bin/.
-export PATH="${VENV_DIR}/bin:${PATH}"
-hash -r 2>/dev/null || true
 source "${VENV_DIR}/bin/activate"
-PYTHON_VENV="${VENV_DIR}/bin/python"
-PIP_VENV="${VENV_DIR}/bin/pip"
-if [[ ! -x "${PYTHON_VENV}" ]]; then
-    echo "ERROR: venv python missing at ${PYTHON_VENV}. Recreate with: rm -rf venv && ./1_setup_download.sh"
-    exit 1
-fi
-echo "→ venv active: $("${PYTHON_VENV}" --version)"
+echo "→ venv active: $(python --version)"
 
 # ── Install / upgrade mtplx ───────────────────────────────────────────────────
 echo ""
 echo "→ Installing / upgrading mtplx ..."
-"${PIP_VENV}" install --upgrade pip --quiet
-"${PIP_VENV}" install --upgrade mtplx huggingface_hub
+pip install --upgrade pip --quiet
+pip install --upgrade mtplx huggingface_hub
 
 echo ""
-echo "→ mtplx version: $(mtplx --version 2>/dev/null || "${PYTHON_VENV}" -c 'import mtplx; print(mtplx.__version__)' 2>/dev/null || echo 'installed')"
+echo "→ mtplx version: $(mtplx --version 2>/dev/null || python -c 'import mtplx; print(mtplx.__version__)' 2>/dev/null || echo 'installed')"
 
 if [[ "${DEPS_ONLY}" == true ]]; then
     echo ""
@@ -309,10 +300,6 @@ echo "  (GGUF + leftover 18-shard + bf16 — hundreds of GB; GGUF V3 was re-uplo
 echo "   after a broken conversion. This stack converts V3 bf16 locally.)"
 echo ""
 
-SIBLING_AUTOSADDLER="$(cd "${SCRIPT_DIR}/.." && pwd)/archived/qwen3-8-27b-obliterated-mtplx-autosaddler"
-SIBLING_MLX="${SIBLING_AUTOSADDLER}/models/${MLX_SUBDIR}"
-SIBLING_BF16="${SIBLING_AUTOSADDLER}/models/bf16-v3"
-
 NEED_BUILD=false
 if [[ "${FORCE}" == true ]]; then
     NEED_BUILD=true
@@ -326,22 +313,6 @@ elif [[ "${PREV_VERSION}" != "${WEIGHT_VERSION}" ]]; then
     echo "  Rebuilding from V3 bf16. Ctrl+C to keep the old quant."
 else
     echo "→ Model weights already complete at ${HF_MODEL} (${WEIGHT_VERSION})"
-fi
-
-# Reuse a complete sibling mlx-4bit (same OBLITERATUS V3 convert) instead of
-# downloading ~56 GB of bf16 again.
-if [[ "${NEED_BUILD}" == true && "${FORCE}" != true ]]; then
-    if subdir_complete "${SIBLING_MLX}" && mlx_has_mtp "${SIBLING_MLX}"; then
-        mkdir -p "${MODELS_ROOT}"
-        echo "→ Reusing sibling ${MLX_SUBDIR}: ${SIBLING_MLX}"
-        ln -sfn "${SIBLING_MLX}" "${HF_MODEL}"
-        NEED_BUILD=false
-        echo "→ Model weights already complete at ${HF_MODEL} (${WEIGHT_VERSION}, symlink)"
-    elif subdir_complete "${SIBLING_BF16}"; then
-        mkdir -p "${MODELS_ROOT}"
-        echo "→ Reusing sibling V3 bf16: ${SIBLING_BF16}"
-        ln -sfn "${SIBLING_BF16}" "${BF16_DIR}"
-    fi
 fi
 
 if [[ "${NEED_BUILD}" == true ]]; then
@@ -385,7 +356,7 @@ if [[ "${NEED_BUILD}" == true ]]; then
 
         echo "→ Converting V3 bf16 → MLX ${Q_BITS}-bit (slow; uses unified memory) ..."
         echo ""
-        if ! "${PYTHON_VENV}" -m mlx_lm convert \
+        if ! python -m mlx_lm convert \
             --hf-path "${BF16_DIR}" \
             --mlx-path "${HF_MODEL}" \
             -q --q-bits "${Q_BITS}" --q-group-size 64; then

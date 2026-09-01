@@ -1,5 +1,6 @@
 # ── Downloaded LLM weights ───────────────────────────────────────────────────
 weights/
+models/
 *.gguf
 *.ggml
 *.bin
@@ -15,9 +16,12 @@ snapshots/
 blobs/
 refs/
 
-# ── Generated local config ─────────────────────────────────────────────────────
-.ornith35b_config
-.ollama.Modelfile
+# ── Generated local config / runtime ──────────────────────────────────────────
+.mtplx_config
+.qwen38_obl_proxy.log
+.qwen38_obl_proxy.pid
+.autosaddler/
+analysis-sweep-longrun.json
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 .env

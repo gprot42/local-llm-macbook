@@ -1,0 +1,9 @@
+venv/
+models/
+.mtplx_config
+.qwen38_obl_proxy.log
+.qwen38_obl_proxy.stdout
+.autosaddler/
+logs/
+__pycache__/
+*.pyc

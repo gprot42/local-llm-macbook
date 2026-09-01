@@ -72,10 +72,16 @@ weights/
 # Uncensored Qwen HF checkouts (weights + tokenizer; download via 1_setup_download.sh)
 **/qwen3-8-27b-obliterated-mtplx/models/
 **/qwen3-8-27b-obliterated-mtplx/.mtplx_config
+**/qwen3-8-27b-obliterated-mtplx-autosaddler/models/
+**/qwen3-8-27b-obliterated-mtplx-autosaddler/.mtplx_config
+**/analysis-sweep-longrun.json
+**/ornith-1.5-9b-obliterated-gguf-ollama*/weights/
 **/qwen3-32b-heretic-mlx/qwen3-32b-heretic-mlx-5bit/
 **/qwen3-32b-heretic-mlx/.qwen3_heretic_config
 **/qwen3.5-122b-a10b-abliterated-mlx/qwen3.5-122b-a10b-abliterated-mlx-4bit/
 **/qwen3.5-122b-a10b-abliterated-mlx/.qwen35_122b_config
+**/qwen3.5-122b-a10b-dflash-mlx/Qwen3.5-122B-A10B-DFlash/
+**/qwen3.5-122b-a10b-dflash-mlx/.dflash_122b_config
 
 # Legacy layout paths (older folder names)
 gemma4-server-heretic-31b-mlx/gemma-*/
@@ -123,6 +129,9 @@ compile_cache/
 Modelfile.generated
 .ollama.Modelfile
 .ornith35b_config
+.ornith15_config
+.ornith_kilo_trace.jsonl
+.ornith_proxy.log
 *.Modelfile.local
 
 
@@ -239,6 +248,7 @@ dist-ssr/
 *.log
 logs/
 log/
+**/.autosaddler/
 *.tmp
 *.temp
 *.bak

@@ -7,12 +7,9 @@ served locally on Apple Silicon with [mtplx](https://github.com/youssofal/MTPLX)
 
 **Engine `:8767`**, **Kilo/harness proxy `:8768`** (beside aligned Qwen3.8 `:8766` and Qwen3.6 `:8765`).
 Do **not** load two large models at once on ≤128 GB unified memory.
-Do **not** start this stack and the archived AutoSaddler copy together — they share `:8767`/`:8768`.
 
-Production stack (no AutoSaddler daemon). Copied from
-[`archived/qwen3-8-27b-obliterated-mtplx-autosaddler/`](../archived/qwen3-8-27b-obliterated-mtplx-autosaddler/)
-and stripped of the EvoDAG optimizer. Setup will **symlink** a complete sibling
-`models/mlx-4bit` (or `bf16-v3`) instead of re-downloading ~56 GB.
+Copied from [`../../censored/qwen3-8-27b-coder-mtplx/`](../../censored/qwen3-8-27b-coder-mtplx/)
+and retargeted at the OBLITERATUS Hub pack.
 
 > **Do not `mtplx pull OBLITERATUS/Qwen3.8-27B-OBLITERATED`.** That repo is a
 > kitchen-sink (GGUF + leftover 18-shard files + V3 bf16). Hub **removed**
@@ -78,8 +75,10 @@ Kilo Code (TUI)
 |------|---------|
 | `1_setup_download.sh` | venv + mtplx + **V3 bf16 snapshot + local MLX convert**; writes `.mtplx_config` |
 | `2_start_mtplx.sh` | mtplx on `:8767` + kilo proxy on `:8768`; optional `--harness-gate` |
-| `qwen38_obl_kilo_proxy.py` | Card sampling + scoped loop middleware (empty/fake-action/prose-loop/JIT continue) |
-| `test_harness.py` | Live API smoke + real tool-loop mini-batch (hits `:8768`) |
+| `qwen38_obl_kilo_proxy.py` | Card sampling + scoped loop middleware (empty/fake-action/prose-loop/JIT continue); reloads `.autosaddler/active.json` |
+| `autosaddler.py` | Persistent Diagnosis–Patch–EvoDAG optimizer |
+| `test_harness.py` | Live API smoke + real tool-loop mini-batch / diagnosis / `--optimize` (hits `:8768`) |
+| `AUTOSADDLER.md` | Optimizer loop, persistence, patch taxonomy |
 | `kilo.json` | Kilo provider: `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` → `:8768/v1` |
 
 ## Model resolution (4-bit by default)
@@ -146,16 +145,28 @@ harness optimization from agent execution traces.
 Paper results (for context, not this 27B): +9.0 / +9.6 / +10.0 pp on GAIA2,
 SWE-Bench Pro, Terminal-Bench 2.0 vs the base harness.
 
-The AutoSaddler EvoDAG optimizer is **not** in this folder. Use
-[`../archived/qwen3-8-27b-obliterated-mtplx-autosaddler/`](../archived/qwen3-8-27b-obliterated-mtplx-autosaddler/)
-if you want `./2_start_mtplx.sh optimize`.
+The optimizer **is shipped** — see [`AUTOSADDLER.md`](AUTOSADDLER.md). Each
+`optimize` run resumes the EvoDAG under `.autosaddler/`. The proxy reloads
+`active.json` by mtime so accepted patches apply to Kilo without a restart.
+
+```bash
+./2_start_mtplx.sh                  # engine + proxy; loads last active harness
+./2_start_mtplx.sh optimize         # mini-batch → diagnose → patch → train/dev → EvoDAG
+python3 autosaddler.py --status
+python3 test_harness.py --optimize --iters 3
+```
+
+Acceptance: keep a patch only if the **train mini-batch improves** and the
+**held-out dev split does not regress**. Live recovery firings go to
+`.autosaddler/live-events.jsonl` for the next diagnose. This is offline
+mini-batch learning — re-run `optimize` to self-improve.
 
 ### What this stack does
 
 | Patch kind (AutoSaddler) | Here |
 |--------------------------|------|
-| Agent loop logic (capability) | Empty-tool recovery, fake-action recovery, prose-loop recovery, just-in-time continue after a tool result; if the model dumps Next-steps with no tool_calls, retry then synthesize the next bash/read so the turn cannot end on a recap |
-| Infra (capability) | Cap tool outputs at 30k chars; repair truncated tool-call JSON; bash-sanitize only *broken* commands (keep `cd && ./script`, `which`, pipes) |
+| Agent loop logic (capability) | Empty-tool recovery, fake-action recovery, prose-loop recovery, just-in-time continue after a tool result |
+| Infra (capability) | Cap tool outputs at 30k chars; repair truncated tool-call JSON |
 | Tool descriptions (steering) | Harness schemas say *when* to glob/grep/read vs bash |
 | Prompt (steering) | Short finish-the-job + verify-before-done in `kilo.json` (replacement, not stacked rules) |
 | Generalization gate | `--agent` mini-batch has a **train** split and a held-out **dev** split |
@@ -167,6 +178,7 @@ if you want `./2_start_mtplx.sh optimize`.
 | default | Unit + live contract, including a **real 2-round executed tool loop** (not pre-stuffed history) |
 | `--quick` | Skip multi-step, real loop, concurrent |
 | `--agent` | Train/dev mini-batch of real loops with trace diagnosis (`no_tool_call`, `stopped_after_1`, `empty_result_idle`, …) |
+| `--optimize` | Persistent Diagnosis–Patch–EvoDAG loop (writes `.autosaddler/`) |
 | `--strict` | Soft (model-behavior) failures become hard |
 
 You do not need these for day-to-day Kilo use (`./2_start_mtplx.sh` already smoke-checks).
@@ -175,6 +187,7 @@ Direct `python3 test_harness.py …` is only if you want a specific slice:
 ```bash
 ./2_start_mtplx.sh check
 ./2_start_mtplx.sh check-agent
+./2_start_mtplx.sh optimize
 python3 test_harness.py --unit          # offline only
 python3 test_harness.py --agent --strict
 ```

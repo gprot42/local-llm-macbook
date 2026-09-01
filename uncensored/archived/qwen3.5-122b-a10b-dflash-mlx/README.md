@@ -39,7 +39,7 @@ compatible with the draft’s `target_layer_ids`.
 ## Quick start
 
 ```bash
-cd uncensored/qwen3.5-122b-a10b-dflash-mlx
+cd uncensored/archived/qwen3.5-122b-a10b-dflash-mlx
 
 # venv + install dflash-mlx + download draft (~1.5 GB)
 ./1_setup_download.sh

@@ -21,7 +21,7 @@ Uncensored **Qwen3.5-122B-A10B** (MoE, ~10B active) abliterated on Apple Silicon
 ## Quick start
 
 ```bash
-cd uncensored/qwen3.5-122b-a10b-abliterated-mlx
+cd uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx
 
 # 1. Download prebuilt MLX 4-bit (~70 GB)
 ./1_setup_download.sh
