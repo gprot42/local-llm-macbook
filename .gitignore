@@ -132,6 +132,9 @@ Modelfile.generated
 .ornith15_config
 .ornith_kilo_trace.jsonl
 .ornith_proxy.log
+.glm_proxy.log
+.glm_proxy.pid
+.glm_ollama.log
 *.Modelfile.local
 
 

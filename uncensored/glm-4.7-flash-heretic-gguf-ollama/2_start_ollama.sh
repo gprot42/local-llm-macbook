@@ -15,10 +15,16 @@
 # Options:
 #   --ollama-port N   Ollama HTTP port (default: 11434)
 #   --proxy-port N    Harness proxy port (default: 18083)
+#   --bind-all        Bind the proxy on 0.0.0.0 (default: 127.0.0.1 only)
 #   --ctx-size N      Context window passed to Ollama (default: 131072)
 #   --quant q4|q5|q6|q8   Override quant (default q8; reads .glm47_config)
 #   --temp T          Sampling temperature (default: 0.6)
 #   --greedy          Shorthand for --temp 0
+#   --keep-alive D    How long Ollama keeps the model loaded after the last
+#                     request (default: 30m; Ollama's own default is 5m).
+#                     Set via OLLAMA_KEEP_ALIVE when this script launches
+#                     Ollama, and via the pre-load request otherwise.
+#   --no-warm         Skip pre-loading the model after start
 #   --no-proxy        Talk to Ollama directly (skip proxy)
 #   start             Start proxy in background (default)
 #   foreground        Run proxy in foreground (Ctrl+C to stop)
@@ -34,13 +40,16 @@ CONFIG_FILE="$SCRIPT_DIR/.glm47_config"
 MODELFILE="$SCRIPT_DIR/.ollama.Modelfile"
 PID_FILE="$SCRIPT_DIR/.glm_proxy.pid"
 LOG_FILE="$SCRIPT_DIR/.glm_proxy.log"
+OLLAMA_LOG_FILE="$SCRIPT_DIR/.glm_ollama.log"
 
 PREFIX="GLM-4.7-Flash-Uncen-Hrt-NEO-CODE-MAX-imat-D_AU"
 
 OLLAMA_PORT=11434
 PROXY_PORT=18083
-HOST="0.0.0.0"
+HOST="127.0.0.1"
 CTX_SIZE=131072
+KEEP_ALIVE="30m"
+DO_WARM=true
 TEMP="0.6"
 TOP_P="0.95"
 TOP_K=20
@@ -53,7 +62,7 @@ RUN_MODE="daemon"   # daemon | foreground
 
 for arg in "$@"; do
     [[ "$arg" == "--help" || "$arg" == "-h" ]] && {
-        sed -n '3,28p' "$0" | sed 's/^# \?//'
+        sed -n '3,34p' "$0" | sed 's/^# \?//'
         exit 0
     }
 done
@@ -68,6 +77,9 @@ while [[ $i -lt ${#args[@]} ]]; do
         restart) DO_RESTART=true; RUN_MODE="daemon"; ((i+=1)) ;;
         --ollama-port) OLLAMA_PORT="${args[$((i+1))]:-$OLLAMA_PORT}"; ((i+=2)) ;;
         --proxy-port) PROXY_PORT="${args[$((i+1))]:-$PROXY_PORT}"; ((i+=2)) ;;
+        --bind-all) HOST="0.0.0.0"; ((i+=1)) ;;
+        --keep-alive) KEEP_ALIVE="${args[$((i+1))]:-$KEEP_ALIVE}"; ((i+=2)) ;;
+        --no-warm) DO_WARM=false; ((i+=1)) ;;
         --ctx-size) CTX_SIZE="${args[$((i+1))]:-$CTX_SIZE}"; ((i+=2)) ;;
         --quant) QUANT_OVERRIDE="${args[$((i+1))]:-}"; ((i+=2)) ;;
         --temp) TEMP="${args[$((i+1))]:-$TEMP}"; ((i+=2)) ;;
@@ -128,8 +140,14 @@ ensure_ollama_running() {
         echo "ERROR: ollama not found. Run: brew install ollama"
         exit 1
     fi
-    echo "→ Starting Ollama on :${OLLAMA_PORT}..."
-    OLLAMA_HOST="127.0.0.1:${OLLAMA_PORT}" ollama serve >/dev/null 2>&1 &
+    echo "→ Starting Ollama on :${OLLAMA_PORT} (keep-alive ${KEEP_ALIVE})..."
+    echo "→ Ollama server log: ${OLLAMA_LOG_FILE}"
+    # Timestamp the boot so old and new runs are distinguishable in one file.
+    printf '\n==== ollama serve started %s (port %s, keep-alive %s) ====\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "${OLLAMA_PORT}" "${KEEP_ALIVE}" \
+        >>"$OLLAMA_LOG_FILE"
+    OLLAMA_HOST="127.0.0.1:${OLLAMA_PORT}" OLLAMA_KEEP_ALIVE="${KEEP_ALIVE}" \
+        ollama serve >>"$OLLAMA_LOG_FILE" 2>&1 &
     local tries=0
     while ! ollama_api_ok; do
         sleep 1
@@ -149,8 +167,10 @@ else
     QUANT="q8"
     GGUF_FILE="${PREFIX}-Q8_0.gguf"
     MODEL_ID="glm-4.7-flash-heretic-q8"
-    MODEL_PATH="$SCRIPT_DIR/weights/$GGUF_FILE"
 fi
+# The config's MODEL_PATH is informational only: derive from this checkout so
+# a moved/renamed repo keeps working.
+MODEL_PATH="$SCRIPT_DIR/weights/$GGUF_FILE"
 
 if [[ -n "${QUANT_OVERRIDE}" ]]; then
     case "${QUANT_OVERRIDE}" in
@@ -200,13 +220,40 @@ if ! command -v ollama >/dev/null 2>&1; then
     exit 1
 fi
 
+# If weights/ is gone (repo moved, cleanup) but Ollama still holds the model,
+# its blob *is* the original GGUF: link it back instead of re-downloading 32 GB.
+recover_weights_from_ollama() {
+    local manifest="${OLLAMA_MODELS:-$HOME/.ollama/models}/manifests/registry.ollama.ai/library/${MODEL_ID}/latest"
+    [[ -f "$manifest" ]] || return 1
+    local digest
+    digest="$(tr -d '\n' <"$manifest" \
+        | grep -o '"mediaType":"application/vnd.ollama.image.model","digest":"sha256:[0-9a-f]*"' \
+        | head -1 | sed 's/.*sha256://; s/"$//')"
+    [[ -n "$digest" ]] || return 1
+    local blob="${OLLAMA_MODELS:-$HOME/.ollama/models}/blobs/sha256-${digest}"
+    [[ -f "$blob" ]] || return 1
+    mkdir -p "$(dirname "$MODEL_PATH")"
+    ln -sfn "$blob" "$MODEL_PATH"
+    echo "→ Restored $MODEL_PATH as a link to the Ollama blob (sha256:${digest:0:12}…)"
+}
+
 VALIDATE="$SCRIPT_DIR/validate_model.py"
 echo "→ Validating model weights..."
+if [[ ! -e "$MODEL_PATH" ]]; then
+    recover_weights_from_ollama || true
+fi
+WEIGHTS_OK=true
 if ! python3 "$VALIDATE" "$MODEL_PATH"; then
-    echo ""
-    echo "ERROR: model weights failed validation: $MODEL_PATH"
-    echo "       Run: ./1_setup_download.sh ${QUANT_OVERRIDE:-${QUANT:-q8}}"
-    exit 1
+    WEIGHTS_OK=false
+    if ollama_api_ok && ollama show "${MODEL_ID}" >/dev/null 2>&1; then
+        echo "→ WARNING: local weights missing/invalid, but '${MODEL_ID}' is registered in Ollama — continuing."
+        echo "           Re-run ./1_setup_download.sh ${QUANT_OVERRIDE:-${QUANT:-q8}} before changing ctx/sampling."
+    else
+        echo ""
+        echo "ERROR: model weights failed validation: $MODEL_PATH"
+        echo "       Run: ./1_setup_download.sh ${QUANT_OVERRIDE:-${QUANT:-q8}}"
+        exit 1
+    fi
 fi
 echo ""
 
@@ -230,6 +277,11 @@ if [[ "$USE_PROXY" == true ]]; then
 fi
 
 ensure_ollama_running
+if [[ "$WEIGHTS_OK" != true ]] && ! ollama show "${MODEL_ID}" >/dev/null 2>&1; then
+    echo "ERROR: no local weights and '${MODEL_ID}' is not registered in Ollama."
+    echo "       Run: ./1_setup_download.sh ${QUANT_OVERRIDE:-${QUANT:-q8}}"
+    exit 1
+fi
 
 # Modelfile: FROM local GGUF + sampling. GLM works best with a clear system style
 # but we leave system prompt to the client.
@@ -253,9 +305,27 @@ else
     echo "→ Ollama model '${MODEL_ID}' already registered (params unchanged)"
 fi
 if [[ "$NEED_CREATE" == true ]]; then
+    if [[ "$WEIGHTS_OK" != true ]]; then
+        echo "ERROR: '${MODEL_ID}' needs (re)creating but the GGUF is missing: $MODEL_PATH"
+        echo "       Run: ./1_setup_download.sh ${QUANT_OVERRIDE:-${QUANT:-q8}}"
+        exit 1
+    fi
     printf '%s\n' "$DESIRED_MODELFILE" >"$MODELFILE"
     ollama create "$MODEL_ID" -f "$MODELFILE"
 fi
+
+# Pre-load so the first Kilo request does not pay the ~10 s cold load.
+warm_model() {
+    [[ "$DO_WARM" == true ]] || return 0
+    echo "→ Pre-loading '${MODEL_ID}' (keep-alive ${KEEP_ALIVE})..."
+    if curl -sf -m 300 "http://127.0.0.1:${OLLAMA_PORT}/api/generate" \
+        -d "{\"model\":\"${MODEL_ID}\",\"keep_alive\":\"${KEEP_ALIVE}\"}" >/dev/null; then
+        echo "→ Model loaded"
+    else
+        echo "→ WARNING: pre-load failed (model will load on first request)"
+    fi
+}
+warm_model
 
 UPSTREAM="http://127.0.0.1:${OLLAMA_PORT}/v1"
 
@@ -284,8 +354,10 @@ if [[ "$USE_PROXY" == true ]]; then
     echo "→ Model:     $MODEL_PATH"
     echo "→ Ollama:    ${MODEL_ID} @ http://127.0.0.1:${OLLAMA_PORT}"
     echo "→ API:       http://127.0.0.1:${PROXY_PORT}/v1  (OpenCode / Kilo — use 127.0.0.1)"
+    echo "→ Bind:      ${HOST}:${PROXY_PORT}$([[ "$HOST" == "0.0.0.0" ]] && echo '  (LAN-exposed: --bind-all)')"
     echo "→ Context:   ${CTX_SIZE} tokens"
     echo "→ Sampling:  temp=${TEMP}, top_p=${TOP_P}, top_k=${TOP_K}"
+    echo "→ Keep-alive: ${KEEP_ALIVE}"
     echo ""
 
     if [[ "$RUN_MODE" == "foreground" ]]; then

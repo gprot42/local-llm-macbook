@@ -2,7 +2,7 @@
 
 Local **uncensored** [GLM-4.7-Flash](https://huggingface.co/Olafangensan/GLM-4.7-Flash-heretic) via **Ollama** + a thin OpenAI proxy for **Kilo / OpenCode**.
 
-API: `http://127.0.0.1:18083/v1`  
+API: `http://127.0.0.1:18083/v1` (proxy binds to 127.0.0.1 only; `--bind-all` for LAN)  
 Weights: [DavidAU/GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF](https://huggingface.co/DavidAU/GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF)
 
 ~30B MoE / ~3B active — fits easily on M5 128 GB. Port **18083** so it can run beside Ornith (`:18082`).
@@ -38,6 +38,55 @@ brew install ollama
 ./2_start_ollama.sh --ctx-size 65536 restart
 ```
 
+### Keep-alive / cold start
+
+Ollama's default keep-alive is 5 min, after which the next request pays a
+~10 s reload. The start script sets 30 min instead: `OLLAMA_KEEP_ALIVE` when it
+launches Ollama itself, and a pre-load request with `keep_alive` when Ollama
+was already running. Kilo's own `/v1` requests do not shorten it (verified on
+Ollama 0.31.1).
+
+```bash
+./2_start_ollama.sh --keep-alive 2h restart   # or --no-warm to skip pre-load
+```
+
+### Streaming timeouts ("SSE read timed out")
+
+Ollama's OpenAI endpoint streams reasoning tokens, but buffers a `tool_calls`
+response and flushes the whole call as one chunk at the end. A large tool call
+at high context can then go minutes with no bytes on the wire, and a client's
+per-chunk watchdog (Kilo's `chunkTimeout`) aborts the stream with
+`ProviderResponseStreamError: SSE read timed out`.
+
+Three defences, all in this repo:
+
+1. **Proxy heartbeat.** `openai_proxy.py` sends an SSE comment (`: keepalive`)
+   whenever the upstream is silent for `--heartbeat` seconds (default 15). SSE
+   parsers ignore the comment, but the bytes reset the client watchdog. Set
+   `--heartbeat 0` to disable.
+2. **`chunkTimeout` 900000** in `kilo.json`, matching the overall `timeout`, so
+   a genuinely stalled generation still ends rather than hanging forever.
+3. **`limit.output` 32768** in `kilo.json`, capping how large a single buffered
+   tool call can grow.
+
+### Logs
+
+| File | Contents |
+|------|----------|
+| `.glm_proxy.log` | Proxy requests + the heartbeat startup line |
+| `.glm_ollama.log` | `ollama serve` stdout/stderr (per-boot timestamped) |
+
+Both are git-ignored. The Ollama log is written only when this script starts
+Ollama; if Ollama was already running, look at its own log instead.
+
+### Moved / re-cloned the repo?
+
+`weights/` is git-ignored, so it disappears when the checkout moves. If the
+model is still registered in Ollama, the start script links `weights/…gguf`
+back to Ollama's blob automatically (no 32 GB re-download). Only a changed
+`--ctx-size` / sampling needs the real GGUF, so re-run `./1_setup_download.sh`
+if `ollama create` complains.
+
 ### Health check
 
 ```bash
@@ -67,7 +116,10 @@ Model ids: `glm-4.7-flash-heretic-q4` · `…-q5` · `…-q6` · `…-q8`
 
 ## Clients
 
-**Kilo** — sample provider in `./kilo.json` (`baseURL` `:18083`). Merge into `~/.config/kilo/kilo.jsonc` and reload.
+**Kilo** — sample provider in `./kilo.json` (`baseURL` `:18083`) plus per-agent
+prompts (build/plan/explore/debug/code, `steps` caps). The shared
+"Conclude decisively" block is managed by `../../sync_agent_prompts.py`; do
+not hand-edit it. Merge into `~/.config/kilo/kilo.jsonc` and reload.
 
 **OpenCode** — point a provider at `http://127.0.0.1:18083/v1` with model id `glm-4.7-flash-heretic-q8`.
 
@@ -75,7 +127,8 @@ Model ids: `glm-4.7-flash-heretic-q4` · `…-q5` · `…-q6` · `…-q8`
 
 ```bash
 ./2_start_ollama.sh restart    # start / replace proxy
-./2_start_ollama.sh --greedy   # temp=0
+./2_start_ollama.sh --greedy   # temp=0 (Kilo's agent temperature still wins per request)
+./2_start_ollama.sh --bind-all # expose proxy on 0.0.0.0 (LAN)
 ./2_start_ollama.sh --no-proxy # Ollama :11434 only
 ./2_start_ollama.sh status
 ./2_start_ollama.sh stop
