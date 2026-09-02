@@ -41,7 +41,11 @@ import argparse
 import difflib
 import json
 import logging
+import os
+import queue
 import re
+import select
+import socket
 import sys
 import threading
 import time
@@ -68,6 +72,55 @@ CARD_TEMPERATURE = 0.0
 CARD_TOP_P = 1.0
 CARD_FREQUENCY_PENALTY = 0.3
 AGENT_MAX_TOKENS_FLOOR = 2048
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# Stability: a greedy 27B that starts looping at max_tokens=32000 holds the
+# engine for 20+ minutes. Kilo's turn loop re-prompts anyway, so cap one
+# completion here (the card only asks for >= 2048).
+AGENT_MAX_TOKENS_CAP = _env_int("QWEN38_OBL_MAX_TOKENS", 8192)
+# No-tool chat (title, plain Q&A) and compaction decode at ~5 tok/s once the
+# prompt is large: 8192 tokens is 25+ minutes. Measured compaction summaries
+# are ~600 tokens; 1536 leaves headroom and bounds the worst case to ~5 min.
+CHAT_MAX_TOKENS_CAP = _env_int("QWEN38_OBL_CHAT_MAX_TOKENS", 2048)
+COMPACTION_MAX_TOKENS_CAP = _env_int("QWEN38_OBL_COMPACTION_MAX_TOKENS", 1536)
+# Prompt-size guard. mtplx decode collapses from ~25 tok/s at 30k prompt
+# tokens to 2-5 tok/s past ~50k (measured 2026-09-02). Kilo's own compaction
+# is the primary control (see limit.context in kilo.jsonc); this is the
+# backstop: oldest non-system turns are dropped in tool-call-consistent groups
+# until the history fits. ~4 chars/token.
+CONTEXT_CHAR_BUDGET = _env_int("QWEN38_OBL_CONTEXT_CHARS", 160_000)
+_TRIM_NOTE = "[proxy: {n} older messages dropped to fit the local context window]"
+# Cross-turn repetition guard. A greedy model that re-issues the SAME tool
+# call (or the same prose) turn after turn never converges: measured 17+
+# identical 38-token completions while the prompt grew 2.8k tokens a step.
+# In-message loop detection (_looks_like_prose_loop) cannot see this because
+# each completion is short. Consecutive identical assistant turns:
+#   >= REPEAT_NUDGE_MIN  -> system nudge
+#   >= REPEAT_NO_TOOLS   -> nudge + tools removed (forces a final text answer,
+#                           which ends Kilo's turn loop)
+#   >= REPEAT_HARD_STOP  -> synthetic final answer, upstream not called
+REPEAT_NUDGE_MIN = 2
+REPEAT_NO_TOOLS = 3
+REPEAT_HARD_STOP = 4
+_REPEAT_NUDGE = (
+    "\n\n[Harness] REPEATED ACTION: your last {n} assistant turns were "
+    "identical. That tool result is already in the conversation above. Do NOT "
+    "issue the same tool call or text again. Take a DIFFERENT next step, or "
+    "answer the user now with what you already know."
+)
+_REPEAT_STOP_TEXT = (
+    "[Harness] Stopped: the model repeated the same action {n} times without "
+    "progress ({what}). The last tool result is above. Rephrase the request "
+    "or name the exact file/command to continue."
+)
 LOOP_MARKER = "Do not stop after 1 of N."
 # Keep this short (finite attention). Extra recovery lives in scoped middleware
 # below — AutoSaddler: capability/loop logic first, then steering; prefer
@@ -77,7 +130,10 @@ LOOP_PREFIX = (
     "result, immediately take the next action. Do not stop after 1 of N. "
     "Do not recap; act. Empty or error tool output: retry with a simpler "
     "local command (ls/glob/grep/read). Verify with a tool before declaring "
-    "the job done.\n\n"
+    "the job done. Tool calls must be real tool_calls, never prose like "
+    "'[Calling tool: ...]'. Never repeat an identical tool call; its result "
+    "is already above. For 'what does X do' questions read only the file "
+    "header (read with limit=150), not the whole file.\n\n"
 )
 
 # AutoSaddler TB2 infra patch: raise tool-output room, still cap context.
@@ -165,6 +221,8 @@ _PLAN_SCRIPT_RE = re.compile(
 AFTER_TOOL_NUDGE_MAX = 3
 EARLY_STOP_FORCE_MAX = 1
 _UPSTREAM_GEN_LOCK = threading.RLock()
+# Mirrors the lock for /healthz ("engine_busy") without touching the lock.
+_UPSTREAM_GEN_LOCK_BUSY = threading.Event()
 _IN_FLIGHT_RE = re.compile(r"already in flight", re.I)
 _SESSION_HEADER_DROP = frozenset(
     {
@@ -183,8 +241,20 @@ _SESSION_BODY_DROP = (
     "conversation_id",
 )
 _IN_FLIGHT_RETRIES = 4
-# Don't sit on a silent prefill for 15 minutes (Kilo "Thinking 10m+").
-UPSTREAM_TIMEOUT = 180
+# Per-read socket timeout toward mtplx. Only trips if the engine is truly
+# dead: the client side is kept alive separately with SSE keepalive comments.
+UPSTREAM_TIMEOUT = _env_int("QWEN38_OBL_UPSTREAM_TIMEOUT", 300)
+# One generation at a time on the engine. A waiter that cannot get the lock
+# within this budget gets a clean 503 (Kilo shows an error and can retry)
+# instead of a silent multi-minute "Thinking" spinner.
+LOCK_WAIT_TIMEOUT = _env_int("QWEN38_OBL_LOCK_WAIT", 900)
+# SSE comment lines are ignored by every OpenAI-compatible parser; sending one
+# every few seconds keeps Kilo's headerTimeout/chunkTimeout from tripping
+# while we buffer a response for the early-stop middleware, and lets us notice
+# a client that already gave up (write fails -> abort upstream, free the lock).
+SSE_KEEPALIVE_SECS = 3.0
+_SSE_KEEPALIVE = b": keepalive\n\n"
+_SSE_DONE = b"data: [DONE]\n\n"
 _PROXY_EMPTY_HINT = "[proxy] Command printed nothing"
 _CMD_SUB_RE = re.compile(r"`|\$\(")
 _SAFE_BASH_STARTS = (
@@ -237,8 +307,14 @@ _COMPACTION_HINTS = (
     "compact the conversation",
     "create a concise summary",
     "conversation summary",
+    "compress conversation context",
+    "compress the conversation",
     "agent=compaction",
 )
+# A tool-less request carrying this many turns of history is a compaction
+# even when the prompt text does not match a hint (Kilo's compaction agent
+# prompt is user-configurable). Plain chat never arrives with a long history.
+_COMPACTION_MIN_MSGS = 16
 
 
 def _looks_like_compaction(body: dict) -> bool:
@@ -250,7 +326,10 @@ def _looks_like_compaction(body: dict) -> bool:
     tools = body.get("tools") or body.get("functions") or []
     if isinstance(tools, list) and tools:
         return False
-    for msg in body.get("messages") or []:
+    msgs = body.get("messages") or []
+    if isinstance(msgs, list) and len(msgs) >= _COMPACTION_MIN_MSGS:
+        return True
+    for msg in msgs:
         if not isinstance(msg, dict):
             continue
         if msg.get("role") not in ("system", "user"):
@@ -443,6 +522,126 @@ def _assistant_faked_action(messages: list[dict] | None) -> bool:
     return False
 
 
+def _assistant_signature(msg: dict) -> str | None:
+    """Normalised identity of an assistant turn: tool calls (name+args) + text.
+
+    None when the turn is too small to mean anything (a bare 'Done.').
+    """
+    tcs = msg.get("tool_calls")
+    sig_tools: list[str] = []
+    if isinstance(tcs, list):
+        for tc in tcs:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+            name = str(fn.get("name") or "")
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (ValueError, TypeError):
+                    pass
+            if isinstance(args, dict):
+                args = json.dumps(args, sort_keys=True, ensure_ascii=False)
+            sig_tools.append(f"{name}({args})")
+    text = re.sub(r"\s+", " ", _message_text(msg)).strip().lower()
+    if not sig_tools and len(text) < 16:
+        return None
+    return "|".join(sorted(sig_tools)) + "#" + text
+
+
+def _assistant_repeat_count(messages: list[dict] | None) -> tuple[int, str]:
+    """How many CONSECUTIVE assistant turns (ignoring interleaved tool/user
+    messages) are identical to the most recent one. Returns (count, sig)."""
+    if not messages:
+        return 0, ""
+    last_sig: str | None = None
+    count = 0
+    for msg in reversed(messages):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        sig = _assistant_signature(msg)
+        if last_sig is None:
+            if sig is None:
+                return 0, ""
+            last_sig = sig
+            count = 1
+            continue
+        if sig == last_sig:
+            count += 1
+        else:
+            break
+    return count, last_sig or ""
+
+
+def _repeat_summary(sig: str) -> str:
+    head = sig.split("#", 1)[0]
+    if head:
+        return head[:120]
+    return "identical text: " + sig.split("#", 1)[-1][:80]
+
+
+def _message_chars(msg: dict) -> int:
+    n = len(_message_text(msg))
+    tcs = msg.get("tool_calls")
+    if isinstance(tcs, list):
+        n += len(json.dumps(tcs, ensure_ascii=False))
+    return n
+
+
+def _trim_history_to_budget(messages: list[dict], budget: int = CONTEXT_CHAR_BUDGET) -> int:
+    """Drop the oldest non-system messages until the history fits ``budget``.
+
+    Drops whole groups so the OpenAI contract holds: an assistant message with
+    tool_calls is removed together with the tool results that answer it. The
+    leading system message(s) and the last 4 messages are never touched.
+    Returns the number of messages dropped.
+    """
+    total = sum(_message_chars(m) for m in messages if isinstance(m, dict))
+    if total <= budget:
+        return 0
+    first = 0
+    while first < len(messages) and isinstance(messages[first], dict) and messages[first].get("role") == "system":
+        first += 1
+    keep_tail = 4
+    dropped = 0
+    while total > budget and len(messages) - first > keep_tail:
+        msg = messages[first]
+        group_end = first + 1
+        if isinstance(msg, dict) and msg.get("role") == "assistant" and msg.get("tool_calls"):
+            while (
+                group_end < len(messages)
+                and isinstance(messages[group_end], dict)
+                and messages[group_end].get("role") in ("tool", "function")
+            ):
+                group_end += 1
+        if group_end > len(messages) - keep_tail:
+            break
+        for m in messages[first:group_end]:
+            if isinstance(m, dict):
+                total -= _message_chars(m)
+        del messages[first:group_end]
+        dropped += group_end - first
+    # Never leave an orphaned tool result at the head of the history.
+    while (
+        len(messages) - first > keep_tail
+        and isinstance(messages[first], dict)
+        and messages[first].get("role") in ("tool", "function")
+    ):
+        total -= _message_chars(messages[first])
+        del messages[first]
+        dropped += 1
+    if dropped:
+        note = _TRIM_NOTE.format(n=dropped)
+        if first > 0:
+            sys_msg = messages[first - 1]
+            _set_message_text(sys_msg, _message_text(sys_msg) + "\n\n" + note)
+        else:
+            messages.insert(0, {"role": "system", "content": note})
+        log.info("[agent] context trim: dropped=%s remaining_chars=%s", dropped, total)
+    return dropped
+
+
 def _last_non_system_role(messages: list[dict] | None) -> str | None:
     if not messages:
         return None
@@ -521,11 +720,21 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
         "after_tool_continue": False,
         "truncated_tool_msgs": 0,
         "missing_path_recovery": False,
+        "repeat_count": 0,
+        "repeat_recovery": False,
+        "repeat_no_tools": False,
+        "repeat_stop": False,
+        "repeat_what": "",
+        "trimmed_msgs": 0,
     }
     if not messages:
         return trace
     truncated = _truncate_tool_messages(messages)
     trace["truncated_tool_msgs"] = truncated
+    cfg = _active_harness()
+    if cfg.get("mw_context_trim", True):
+        budget = int(cfg.get("context_char_budget") or CONTEXT_CHAR_BUDGET)
+        trace["trimmed_msgs"] = _trim_history_to_budget(messages, budget)
     streak = _recent_empty_tool_streak(messages)
     fake = _assistant_faked_action(messages)
     prose = _assistant_prose_loop(messages)
@@ -533,7 +742,6 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
     trace["empty_tool_streak"] = streak
     trace["fake_action"] = fake
     trace["prose_loop"] = prose
-    cfg = _active_harness()
     streak_min = int(cfg.get("empty_streak_min") or 1)
     if streak >= streak_min and cfg.get("mw_empty_tool", True):
         if _last_tool_was_missing_path(messages) and _nudge_system(
@@ -579,16 +787,40 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
         "prose-loop recovery",
     ):
         trace["prose_loop_recovery"] = True
+    if cfg.get("mw_repeat_guard", True):
+        rep, sig = _assistant_repeat_count(messages)
+        trace["repeat_count"] = rep
+        nudge_min = int(cfg.get("repeat_nudge_min") or REPEAT_NUDGE_MIN)
+        no_tools_min = int(cfg.get("repeat_no_tools") or REPEAT_NO_TOOLS)
+        stop_min = int(cfg.get("repeat_hard_stop") or REPEAT_HARD_STOP)
+        if rep >= nudge_min:
+            trace["repeat_what"] = _repeat_summary(sig)
+            # Escalate: the marker is stable, the count in the text is not, so
+            # replace an older nudge instead of stacking a second one.
+            _strip_nudge_prefix(messages, "[Harness] REPEATED ACTION:")
+            _nudge_system(
+                messages,
+                "[Harness] REPEATED ACTION:",
+                _REPEAT_NUDGE.format(n=rep),
+                f"repeat recovery (n={rep} what={trace['repeat_what']!r})",
+            )
+            trace["repeat_recovery"] = True
+            trace["repeat_no_tools"] = rep >= no_tools_min
+            trace["repeat_stop"] = rep >= stop_min
     if (
         trace.get("empty_tool_recovery")
         or trace.get("fake_action_recovery")
         or trace.get("prose_loop_recovery")
+        or trace.get("repeat_recovery")
     ):
         append_live_event(
             {
                 "empty_tool_recovery": trace.get("empty_tool_recovery"),
                 "fake_action_recovery": trace.get("fake_action_recovery"),
                 "prose_loop_recovery": trace.get("prose_loop_recovery"),
+                "repeat_recovery": trace.get("repeat_recovery"),
+                "repeat_count": trace.get("repeat_count"),
+                "repeat_stop": trace.get("repeat_stop"),
                 "after_tool_continue": trace.get("after_tool_continue"),
                 "fake_action": fake,
                 "prose_loop": prose,
@@ -596,6 +828,20 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
             }
         )
     return trace
+
+
+def _strip_nudge_prefix(messages: list[dict], marker: str) -> None:
+    """Remove a previously injected nudge paragraph that starts with ``marker``."""
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "system":
+            continue
+        text = _message_text(msg)
+        i = text.find(marker)
+        if i < 0:
+            continue
+        j = text.find("\n\n", i)
+        cleaned = (text[:i] + (text[j:] if j >= 0 else "")).rstrip()
+        _set_message_text(msg, cleaned)
 
 
 def _apply_card_sampling(body: dict) -> None:
@@ -606,7 +852,7 @@ def _apply_card_sampling(body: dict) -> None:
     body.pop("top_k", None)
 
 
-def _ensure_max_tokens(body: dict, *, floor: int) -> None:
+def _ensure_max_tokens(body: dict, *, floor: int, cap: int | None = None) -> None:
     raw = body.get("max_tokens")
     if raw is None:
         raw = body.get("max_completion_tokens")
@@ -615,7 +861,28 @@ def _ensure_max_tokens(body: dict, *, floor: int) -> None:
     except (TypeError, ValueError):
         value = 0
     if value <= 0 or value < floor:
-        body["max_tokens"] = floor
+        value = floor
+    if cap is not None and value > cap:
+        value = max(cap, floor)
+    body["max_tokens"] = value
+    # mtplx honours max_tokens; drop the alias so the two never disagree.
+    body.pop("max_completion_tokens", None)
+
+
+def _cap_max_tokens(body: dict, *, cap: int) -> None:
+    """Clamp an explicit max_tokens without inventing one."""
+    raw = body.get("max_tokens")
+    if raw is None:
+        raw = body.get("max_completion_tokens")
+    if raw is None:
+        return
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return
+    if value > cap:
+        body["max_tokens"] = cap
+        body.pop("max_completion_tokens", None)
 
 
 def _wrap_loop_prefix(prefix: str) -> str:
@@ -719,25 +986,53 @@ def prepare_body(body: dict, trace: dict | None = None) -> dict:
             "after_tool_continue": False,
             "truncated_tool_msgs": 0,
             "loop_prompt": False,
+            "repeat_count": 0,
+            "repeat_recovery": False,
+            "repeat_no_tools": False,
+            "repeat_stop": False,
+            "repeat_what": "",
+            "trimmed_msgs": 0,
         }
     )
     if _looks_like_compaction(body):
         body.pop("tools", None)
         body["tool_choice"] = "none"
         _apply_card_sampling(body)
-        _ensure_max_tokens(body, floor=512)
+        _ensure_max_tokens(body, floor=512, cap=COMPACTION_MAX_TOKENS_CAP)
+        msgs = body.get("messages")
+        if isinstance(msgs, list):
+            # A compaction prompt is the one request guaranteed to arrive with
+            # the whole history; keep it inside the window the engine can
+            # actually decode at a usable speed.
+            tr["truncated_tool_msgs"] = _truncate_tool_messages(msgs)
+            tr["trimmed_msgs"] = _trim_history_to_budget(msgs)
         tr["compaction"] = True
         return body
 
     _apply_card_sampling(body)
     if body.get("tools"):
-        _ensure_max_tokens(body, floor=AGENT_MAX_TOKENS_FLOOR)
+        _ensure_max_tokens(
+            body, floor=AGENT_MAX_TOKENS_FLOOR, cap=AGENT_MAX_TOKENS_CAP
+        )
         _inject_loop_prompt(body)
         tr["loop_prompt"] = True
         msgs = body.get("messages")
         if isinstance(msgs, list):
             tr.update(apply_loop_middleware(msgs))
             _repair_history_tool_calls(msgs)
+            if tr.get("repeat_no_tools"):
+                # The model keeps re-issuing one tool call. Take the tools
+                # away for this turn so it has to answer in text, which ends
+                # Kilo's tool loop instead of burning another engine slot.
+                body.pop("tools", None)
+                body.pop("functions", None)
+                body["tool_choice"] = "none"
+                _cap_max_tokens(body, cap=CHAT_MAX_TOKENS_CAP)
+                log.info("[agent] repeat guard: tools removed (n=%s)", tr.get("repeat_count"))
+    else:
+        # Plain chat / title generation: still bound a runaway greedy loop,
+        # but leave an absent max_tokens to the engine default.
+        _cap_max_tokens(body, cap=CHAT_MAX_TOKENS_CAP)
     return body
 
 
@@ -1315,6 +1610,51 @@ def _sse_tool_payload(tcs: list[dict], model: str, response_id: str) -> bytes:
     ).encode("utf-8")
 
 
+def _sse_text_payload(text: str, model: str, response_id: str) -> bytes:
+    """A complete SSE body carrying one final assistant text (finish=stop)."""
+    chunk = {
+        "id": response_id,
+        "object": "chat.completion.chunk",
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": text},
+                "finish_reason": None,
+            }
+        ],
+    }
+    done = {
+        "id": response_id,
+        "object": "chat.completion.chunk",
+        "model": model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    }
+    return (
+        f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+        f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
+        "data: [DONE]\n\n"
+    ).encode("utf-8")
+
+
+def _json_text_payload(text: str, model: str, response_id: str) -> bytes:
+    return json.dumps(
+        {
+            "id": response_id,
+            "object": "chat.completion",
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": text},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
 def _is_chat_path(path: str) -> bool:
     p = (path or "").rstrip("/")
     return p.endswith("/chat/completions") or p.endswith("/messages")
@@ -1664,6 +2004,166 @@ def _needs_buffered_sse(steer_trace: dict[str, Any]) -> bool:
     )
 
 
+class _ClientGone(Exception):
+    """The Kilo side closed its socket; stop generating for it."""
+
+
+def _sse_error_payload(status: int, detail: bytes | str) -> bytes:
+    """Wrap an upstream/proxy failure as a terminal SSE event.
+
+    Once we have committed to ``text/event-stream`` we cannot change the HTTP
+    status, so the OpenAI-style error object is delivered in-band. Every
+    OpenAI-compatible client surfaces ``{"error": ...}`` chunks as a failure.
+    """
+    text = detail.decode("utf-8", "replace") if isinstance(detail, bytes) else detail
+    message = text.strip() or f"upstream HTTP {status}"
+    stripped = text.lstrip()
+    if stripped.startswith("data:") or '"chat.completion.chunk"' in stripped[:600]:
+        # A partial SSE body (the engine died or restarted mid-stream). Kilo
+        # would otherwise show 2 KB of raw chunk JSON as the error text.
+        message = (
+            f"upstream stream aborted mid-response (HTTP {status}); the engine "
+            "probably restarted — retry the request"
+        )
+    else:
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
+                message = str(parsed["error"].get("message") or message)
+        except (ValueError, TypeError):
+            pass
+    obj = {
+        "error": {
+            "message": message[:600],
+            "type": "proxy_error",
+            "code": int(status),
+        }
+    }
+    return (
+        f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode("utf-8") + _SSE_DONE
+    )
+
+
+def _sse_at_event_boundary(buf: bytes) -> bool:
+    """True when it is safe to interleave an SSE comment line."""
+    return not buf or buf.endswith(b"\n\n") or buf.endswith(b"\r\n\r\n")
+
+
+class _UpstreamFetch:
+    """One upstream request, read in a worker thread.
+
+    The handler thread never blocks on the engine socket. It polls the chunk
+    queue with a short timeout so it can emit keepalives to the client (and
+    notice when the client is gone) even while mtplx is still prefilling.
+    """
+
+    def __init__(
+        self,
+        state: ProxyState,
+        method: str,
+        path: str,
+        body: bytes,
+        headers: dict[str, str],
+    ) -> None:
+        self.status: int | None = None
+        self.headers: dict[str, str] = {}
+        self.content_type = ""
+        self.error: BaseException | None = None
+        self._q: queue.Queue[bytes | None] = queue.Queue()
+        self._ready = threading.Event()
+        self._aborted = False
+        self._conn: HTTPConnection | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(state, method, path, body, headers),
+            name="upstream-fetch",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(
+        self,
+        state: ProxyState,
+        method: str,
+        path: str,
+        body: bytes,
+        headers: dict[str, str],
+    ) -> None:
+        conn: HTTPConnection | None = None
+        try:
+            conn = _connect(state)
+            self._conn = conn
+            conn.request(method, path, body=body, headers=headers)
+            resp = conn.getresponse()
+            self.status = resp.status
+            self.headers = {k: v for k, v in resp.getheaders()}
+            # uvicorn/mtplx send lowercase names; http.client.getheader is
+            # case-insensitive. A dict .get("Content-Type") misses them and
+            # the passthrough path then wraps a good SSE stream as
+            # {"error": ...} — Kilo reports that as "cannot connect to API".
+            self.content_type = resp.getheader("Content-Type") or ""
+            self._ready.set()
+            while True:
+                chunk = resp.read(4096)
+                if not chunk:
+                    break
+                self._q.put(chunk)
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the handler
+            if not self._aborted:
+                self.error = exc
+        finally:
+            self._ready.set()
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._q.put(None)
+
+    def abort(self) -> None:
+        """Tear down the engine socket so mtplx cancels the generation."""
+        self._aborted = True
+        conn = self._conn
+        if conn is None:
+            return
+        sock = getattr(conn, "sock", None)
+        try:
+            if sock is not None:
+                sock.shutdown(2)  # SHUT_RDWR
+        except OSError:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    def wait_ready(self, on_tick, tick: float = SSE_KEEPALIVE_SECS) -> None:
+        while not self._ready.wait(tick):
+            on_tick()
+        if self.error is not None:
+            raise self.error
+
+    def iter_chunks(self, on_tick, tick: float = SSE_KEEPALIVE_SECS):
+        while True:
+            try:
+                chunk = self._q.get(timeout=tick)
+            except queue.Empty:
+                on_tick()
+                continue
+            if chunk is None:
+                if self.error is not None:
+                    raise self.error
+                return
+            yield chunk
+
+    def join(self, timeout: float = 2.0) -> None:
+        self._thread.join(timeout)
+
+
+def _noop() -> None:
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     state: ProxyState
@@ -1693,6 +2193,13 @@ class Handler(BaseHTTPRequestHandler):
                         "frequency_penalty": CARD_FREQUENCY_PENALTY,
                         "enable_thinking": False,
                     },
+                    "limits": {
+                        "max_tokens_cap": AGENT_MAX_TOKENS_CAP,
+                        "upstream_timeout": UPSTREAM_TIMEOUT,
+                        "lock_wait_timeout": LOCK_WAIT_TIMEOUT,
+                        "sse_keepalive_secs": SSE_KEEPALIVE_SECS,
+                    },
+                    "engine_busy": _UPSTREAM_GEN_LOCK_BUSY.is_set(),
                 },
             )
             return
@@ -1718,89 +2225,290 @@ class Handler(BaseHTTPRequestHandler):
             return b""
         return self.rfile.read(n)
 
-    def _upstream_raw(
-        self, path: str, body: bytes, headers: dict[str, str]
-    ) -> tuple[int, dict[str, str], str, bytes]:
-        conn = _connect(self.state)
-        try:
-            conn.request(self.command, path, body=body, headers=headers)
-            resp = conn.getresponse()
-            resp_headers = {k: v for k, v in resp.getheaders()}
-            content_type = resp_headers.get("Content-Type", "")
-            chunks: list[bytes] = []
-            while True:
-                chunk = resp.read(4096)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-            return resp.status, resp_headers, content_type, b"".join(chunks)
-        finally:
-            conn.close()
+    # ---- client-side helpers -------------------------------------------
 
-    def _upstream_once(
-        self, path: str, body: bytes, headers: dict[str, str]
-    ) -> tuple[int, dict[str, str], str, bytes]:
-        chat = _is_chat_path(path)
-        if chat:
-            _UPSTREAM_GEN_LOCK.acquire()
+    def _client_write(self, data: bytes) -> None:
         try:
-            last: tuple[int, dict[str, str], str, bytes] | None = None
-            attempts = _IN_FLIGHT_RETRIES if chat else 1
-            for attempt in range(attempts):
-                last = self._upstream_raw(path, body, headers)
-                if chat and _is_in_flight_error(last[0], last[3]):
-                    log.info(
-                        "[agent] session already in flight (try %s/%s)",
-                        attempt + 1,
-                        attempts,
-                    )
-                    time.sleep(0.4 * (attempt + 1))
-                    continue
-                return last
-            assert last is not None
+            self.wfile.write(data)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+            raise _ClientGone(str(exc)) from exc
+
+    def _sse_begin(self, extra_headers: dict[str, str] | None = None) -> None:
+        """Commit to a 200 text/event-stream response right away.
+
+        Kilo's ``headerTimeout`` starts at request time; the engine can take
+        minutes to prefill a long history, so headers go out before we know
+        anything about the upstream result.
+        """
+        self.send_response(200)
+        for k, v in (extra_headers or {}).items():
+            if k.lower() in (
+                "transfer-encoding",
+                "connection",
+                "content-length",
+                "content-encoding",
+                "content-type",
+            ):
+                continue
+            self.send_header(k, v)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        try:
+            self.end_headers()
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+            raise _ClientGone(str(exc)) from exc
+        self._sse_sent = b""
+
+    def _client_closed(self) -> bool:
+        """Passive EOF probe: True once Kilo has closed its side.
+
+        The request body is fully consumed before we get here, so any readable
+        state on the socket is either EOF (b"") or a reset. Works even while an
+        SSE event is half-sent, when a keepalive write is not allowed.
+        """
+        sock = getattr(self, "connection", None)
+        if sock is None:
+            return False
+        try:
+            readable, _, _ = select.select([sock], [], [], 0)
+            if not readable:
+                return False
+            return sock.recv(1, socket.MSG_PEEK) == b""
+        except (OSError, ValueError):
+            return True
+
+    def _sse_tick(self) -> None:
+        """Keepalive between events only (never inside a partial event)."""
+        if self._client_closed():
+            raise _ClientGone("client closed socket")
+        if _sse_at_event_boundary(getattr(self, "_sse_sent", b"")):
+            self._client_write(_SSE_KEEPALIVE)
+
+    def _sse_send(self, data: bytes) -> None:
+        self._client_write(data)
+        # Remember only the tail; we just need to know if an event is open.
+        self._sse_sent = data[-4:]
+
+    def _sse_fail(self, status: int, detail: bytes | str) -> None:
+        log.info("[agent] sse in-band error %s", status)
+        self._sse_send(_sse_error_payload(status, detail))
+
+    # ---- engine lock -----------------------------------------------------
+
+    def _acquire_gen_lock(self, on_tick) -> bool:
+        """Serialize engine use; keep the client alive while queued."""
+        deadline = time.monotonic() + LOCK_WAIT_TIMEOUT
+        waited = False
+        while True:
+            if _UPSTREAM_GEN_LOCK.acquire(timeout=SSE_KEEPALIVE_SECS):
+                _UPSTREAM_GEN_LOCK_BUSY.set()
+                if waited:
+                    log.info("[agent] engine lock acquired after wait")
+                return True
+            if not waited:
+                log.info("[agent] engine busy; queuing request")
+                waited = True
+            on_tick()
+            if time.monotonic() >= deadline:
+                log.info("[agent] engine lock wait exceeded %ss", LOCK_WAIT_TIMEOUT)
+                return False
+
+    @staticmethod
+    def _release_gen_lock() -> None:
+        _UPSTREAM_GEN_LOCK_BUSY.clear()
+        try:
+            _UPSTREAM_GEN_LOCK.release()
+        except RuntimeError:
+            pass
+
+    # ---- upstream --------------------------------------------------------
+
+    def _fetch_buffered(
+        self,
+        path: str,
+        body: bytes,
+        headers: dict[str, str],
+        on_tick=_noop,
+    ) -> tuple[int, dict[str, str], str, bytes]:
+        """Full upstream response, retrying mtplx 409 session-in-flight.
+
+        Caller holds the generation lock. ``on_tick`` runs every few seconds
+        while we wait so a streaming client can be kept alive / detected gone.
+        """
+        chat = _is_chat_path(path)
+        attempts = _IN_FLIGHT_RETRIES if chat else 1
+        last: tuple[int, dict[str, str], str, bytes] | None = None
+        for attempt in range(attempts):
+            fetch = _UpstreamFetch(self.state, self.command, path, body, headers)
+            try:
+                fetch.wait_ready(on_tick)
+                chunks = list(fetch.iter_chunks(on_tick))
+            except _ClientGone:
+                fetch.abort()
+                fetch.join()
+                raise
+            finally:
+                fetch.join()
+            last = (
+                int(fetch.status or 502),
+                fetch.headers,
+                fetch.content_type,
+                b"".join(chunks),
+            )
+            if chat and _is_in_flight_error(last[0], last[3]):
+                log.info(
+                    "[agent] session already in flight (try %s/%s)",
+                    attempt + 1,
+                    attempts,
+                )
+                # Back off, but keep the client alive while doing so.
+                end = time.monotonic() + 0.4 * (attempt + 1)
+                while time.monotonic() < end:
+                    time.sleep(min(0.2, max(0.0, end - time.monotonic())))
+                on_tick()
+                continue
             return last
-        finally:
-            if chat:
-                _UPSTREAM_GEN_LOCK.release()
+        assert last is not None
+        return last
 
     def _stream_passthrough(
         self, path: str, body: bytes, headers: dict[str, str]
     ) -> None:
-        """Forward SSE as it arrives so Kilo is not stuck on Thinking."""
+        """Forward SSE as it arrives; headers + keepalives go out immediately."""
         chat = _is_chat_path(path)
-        if chat:
-            _UPSTREAM_GEN_LOCK.acquire()
-        conn = _connect(self.state)
+        self._sse_begin()
+        if chat and not self._acquire_gen_lock(self._sse_tick):
+            self._sse_fail(503, "engine busy: another generation is still running")
+            return
+        fetch: _UpstreamFetch | None = None
         try:
-            conn.request(self.command, path, body=body, headers=headers)
-            resp = conn.getresponse()
-            self.send_response(resp.status)
-            for k, v in resp.getheaders():
-                if k.lower() in (
-                    "transfer-encoding",
-                    "connection",
-                    "content-length",
-                    "content-encoding",
-                ):
-                    continue
-                self.send_header(k, v)
-            self.send_header("Connection", "close")
-            self.end_headers()
-            while True:
-                chunk = resp.read(4096)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            log.info("client disconnected mid-stream")
-        finally:
+            fetch = _UpstreamFetch(self.state, self.command, path, body, headers)
+            fetch.wait_ready(self._sse_tick)
+            status = int(fetch.status or 502)
+            if status != 200 or "text/event-stream" not in fetch.content_type:
+                payload = b"".join(fetch.iter_chunks(self._sse_tick))
+                if status == 200 and "application/json" in fetch.content_type:
+                    # Upstream ignored stream=true; hand the JSON over as-is
+                    # inside an SSE event so the client still gets an answer.
+                    payload = _repair_response_payload(payload, None)
+                    self._sse_send(b"data: " + payload + b"\n\n" + _SSE_DONE)
+                    return
+                self._sse_fail(status, payload)
+                return
+            for chunk in fetch.iter_chunks(self._sse_tick):
+                self._sse_send(chunk)
+            if not getattr(self, "_sse_sent", b"").endswith(b"\n\n"):
+                self._sse_send(b"\n\n")
+        except _ClientGone:
+            log.info("client disconnected mid-stream; aborting upstream")
+            if fetch is not None:
+                fetch.abort()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("upstream error (stream): %s", exc)
             try:
-                conn.close()
-            except Exception:
+                self._sse_fail(502, str(exc))
+            except _ClientGone:
                 pass
+        finally:
+            if fetch is not None:
+                fetch.join()
             if chat:
-                _UPSTREAM_GEN_LOCK.release()
+                self._release_gen_lock()
+
+    # ---- middleware decision -------------------------------------------
+
+    def _post_process(
+        self,
+        *,
+        path: str,
+        headers: dict[str, str],
+        body: bytes,
+        parsed: dict | None,
+        steer_messages: list[dict] | None,
+        steer_trace: dict[str, Any],
+        stream: bool,
+        on_tick,
+    ) -> tuple[int, dict[str, str], str, bytes]:
+        """Fetch once, apply the early-stop retry / synthetic continue."""
+        status, resp_headers, content_type, payload = self._fetch_buffered(
+            path, body, headers, on_tick
+        )
+        if status != 200:
+            return status, resp_headers, content_type, payload
+        is_sse = stream or "text/event-stream" in content_type
+        want_retry = (
+            parsed is not None
+            and steer_trace.get("after_tool_continue")
+            and _active_harness().get("mw_early_stop", True)
+        )
+        if is_sse:
+            text, has_tools = _sse_text_and_tools(payload)
+            if want_retry and _should_force_continue(text, has_tools, steer_messages):
+                log.info("[agent] early-stop plan retry")
+                _apply_early_stop_retry(parsed)  # type: ignore[arg-type]
+                body = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+                headers["Content-Length"] = str(len(body))
+                status, resp_headers, content_type, payload = self._fetch_buffered(
+                    path, body, headers, on_tick
+                )
+                if status != 200:
+                    return status, resp_headers, content_type, payload
+                is_sse = stream or "text/event-stream" in content_type
+                text, has_tools = _sse_text_and_tools(payload)
+                if _should_force_continue(text, has_tools, steer_messages):
+                    tcs = _synthetic_tool_calls(text, steer_messages)
+                    if tcs:
+                        model, rid = _payload_ids(payload, sse=is_sse)
+                        log.info(
+                            "[agent] synthetic continue %s %s",
+                            tcs[0]["function"]["name"],
+                            tcs[0]["function"]["arguments"][:80],
+                        )
+                        return status, resp_headers, content_type, _sse_tool_payload(
+                            tcs, model, rid
+                        )
+                    log.info("[agent] early-stop cap: letting recap through")
+            return (
+                status,
+                resp_headers,
+                content_type,
+                _repair_sse_payload(payload, steer_messages),
+            )
+        if "application/json" in content_type:
+            payload = _repair_response_payload(payload, steer_messages)
+            text, has_tools = _json_text_and_tools(payload)
+            if want_retry and _should_force_continue(text, has_tools, steer_messages):
+                log.info("[agent] early-stop plan retry")
+                _apply_early_stop_retry(parsed)  # type: ignore[arg-type]
+                body = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+                headers["Content-Length"] = str(len(body))
+                status, resp_headers, content_type, payload = self._fetch_buffered(
+                    path, body, headers, on_tick
+                )
+                if status != 200:
+                    return status, resp_headers, content_type, payload
+                if "application/json" in content_type:
+                    payload = _repair_response_payload(payload, steer_messages)
+                text, has_tools = _json_text_and_tools(payload)
+                if _should_force_continue(text, has_tools, steer_messages):
+                    tcs = _synthetic_tool_calls(text, steer_messages)
+                    if tcs:
+                        model, rid = _payload_ids(payload, sse=False)
+                        log.info(
+                            "[agent] synthetic continue %s %s",
+                            tcs[0]["function"]["name"],
+                            tcs[0]["function"]["arguments"][:80],
+                        )
+                        payload = _json_tool_payload(tcs, model, rid)
+                    else:
+                        log.info("[agent] early-stop cap: letting recap through")
+        return status, resp_headers, content_type, payload
+
+    # ---- request entry ---------------------------------------------------
 
     def _proxy(self) -> None:
         body = self._read_body()
@@ -1833,9 +2541,7 @@ class Handler(BaseHTTPRequestHandler):
                 if _scrub_session_body(data):
                     log.info("[agent] stripped client session affinity")
                 stream = bool(data.get("stream"))
-                if path.rstrip("/").endswith("/chat/completions") or path.rstrip(
-                    "/"
-                ).endswith("/messages"):
+                if _is_chat_path(path):
                     log.info("[in] %s", summarize_request(data))
                     prepare_body(data, steer_trace)
                     msgs = data.get("messages")
@@ -1844,7 +2550,7 @@ class Handler(BaseHTTPRequestHandler):
                     log.info(
                         "[steer] temp=%s think=%s fp=%s ntools=%s max_tokens=%s "
                         "compaction=%s empty_rec=%s fake=%s prose=%s "
-                        "after_tool=%s trunc=%s",
+                        "after_tool=%s trunc=%s repeat=%s trimmed=%s nmsg=%s",
                         data.get("temperature"),
                         data.get("enable_thinking"),
                         data.get("frequency_penalty"),
@@ -1856,6 +2562,9 @@ class Handler(BaseHTTPRequestHandler):
                         steer_trace.get("prose_loop_recovery"),
                         steer_trace.get("after_tool_continue"),
                         steer_trace.get("truncated_tool_msgs"),
+                        steer_trace.get("repeat_count"),
+                        steer_trace.get("trimmed_msgs"),
+                        len(msgs) if isinstance(msgs, list) else 0,
                     )
                 body = json.dumps(data, ensure_ascii=False).encode("utf-8")
                 headers["Content-Type"] = "application/json"
@@ -1863,82 +2572,71 @@ class Handler(BaseHTTPRequestHandler):
         headers["Content-Length"] = str(len(body))
         headers["Host"] = f"{self.state.host}:{self.state.port}"
         headers["Connection"] = "close"
+        chat = _is_chat_path(path)
+
+        if chat and steer_trace.get("repeat_stop") and parsed is not None:
+            # Hard stop: N identical assistant turns in a row. Do not spend
+            # another engine slot; end the turn with a visible explanation.
+            n = int(steer_trace.get("repeat_count") or 0)
+            what = str(steer_trace.get("repeat_what") or "same action")
+            text = _REPEAT_STOP_TEXT.format(n=n, what=what)
+            model = str(parsed.get("model") or "qwen3.8-27b-obliterated-mtplx")
+            rid = f"chatcmpl-proxy-repeat-{int(time.time())}"
+            log.warning("[agent] repeat guard: hard stop n=%s what=%r", n, what)
+            append_live_event({"repeat_hard_stop": True, "repeat_count": n, "what": what})
+            try:
+                if stream:
+                    self._sse_begin()
+                    self._sse_send(_sse_text_payload(text, model, rid))
+                else:
+                    payload = _json_text_payload(text, model, rid)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Connection", "close")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+            except (_ClientGone, BrokenPipeError, ConnectionResetError):
+                pass
+            return
 
         try:
             if stream and not _needs_buffered_sse(steer_trace):
                 log.info("[agent] sse passthrough")
                 self._stream_passthrough(path, body, headers)
                 return
-            status, resp_headers, content_type, payload = self._upstream_once(
-                path, body, headers
-            )
-            is_sse = stream or "text/event-stream" in content_type
-            if is_sse:
-                text, has_tools = _sse_text_and_tools(payload)
-                if (
-                    parsed is not None
-                    and steer_trace.get("after_tool_continue")
-                    and _active_harness().get("mw_early_stop", True)
-                    and _should_force_continue(text, has_tools, steer_messages)
-                ):
-                    log.info("[agent] early-stop plan retry")
-                    _apply_early_stop_retry(parsed)
-                    body = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
-                    headers["Content-Length"] = str(len(body))
-                    status, resp_headers, content_type, payload = self._upstream_once(
-                        path, body, headers
-                    )
-                    is_sse = stream or "text/event-stream" in content_type
-                    text, has_tools = _sse_text_and_tools(payload)
-                    if _should_force_continue(text, has_tools, steer_messages):
-                        tcs = _synthetic_tool_calls(text, steer_messages)
-                        if tcs:
-                            model, rid = _payload_ids(payload, sse=is_sse)
-                            log.info(
-                                "[agent] synthetic continue %s %s",
-                                tcs[0]["function"]["name"],
-                                tcs[0]["function"]["arguments"][:80],
-                            )
-                            payload = _sse_tool_payload(tcs, model, rid)
-                        else:
-                            log.info("[agent] early-stop cap: letting recap through")
-                            payload = _repair_sse_payload(payload, steer_messages)
-                    else:
-                        payload = _repair_sse_payload(payload, steer_messages)
-                else:
-                    payload = _repair_sse_payload(payload, steer_messages)
-            elif "application/json" in content_type:
-                payload = _repair_response_payload(payload, steer_messages)
-                text, has_tools = _json_text_and_tools(payload)
-                if (
-                    parsed is not None
-                    and steer_trace.get("after_tool_continue")
-                    and _active_harness().get("mw_early_stop", True)
-                    and _should_force_continue(text, has_tools, steer_messages)
-                ):
-                    log.info("[agent] early-stop plan retry")
-                    _apply_early_stop_retry(parsed)
-                    body = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
-                    headers["Content-Length"] = str(len(body))
-                    status, resp_headers, content_type, payload = self._upstream_once(
-                        path, body, headers
-                    )
-                    if "application/json" in content_type:
-                        payload = _repair_response_payload(payload, steer_messages)
-                    text, has_tools = _json_text_and_tools(payload)
-                    if _should_force_continue(text, has_tools, steer_messages):
-                        tcs = _synthetic_tool_calls(text, steer_messages)
-                        if tcs:
-                            model, rid = _payload_ids(payload, sse=False)
-                            log.info(
-                                "[agent] synthetic continue %s %s",
-                                tcs[0]["function"]["name"],
-                                tcs[0]["function"]["arguments"][:80],
-                            )
-                            payload = _json_tool_payload(tcs, model, rid)
-                        else:
-                            log.info("[agent] early-stop cap: letting recap through")
+            if stream:
+                self._proxy_buffered_sse(
+                    path, headers, body, parsed, steer_messages, steer_trace
+                )
+                return
 
+            # Non-streaming (harness / curl): plain JSON in, plain JSON out.
+            if chat and not self._acquire_gen_lock(_noop):
+                self._send_json(
+                    503,
+                    {
+                        "error": {
+                            "message": "engine busy: another generation is still running",
+                            "type": "proxy_busy",
+                        }
+                    },
+                )
+                return
+            try:
+                status, resp_headers, content_type, payload = self._post_process(
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    parsed=parsed,
+                    steer_messages=steer_messages,
+                    steer_trace=steer_trace,
+                    stream=False,
+                    on_tick=_noop,
+                )
+            finally:
+                if chat:
+                    self._release_gen_lock()
             self.send_response(status)
             for k, v in resp_headers.items():
                 if k.lower() in (
@@ -1953,9 +2651,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
-        except BrokenPipeError:
+        except _ClientGone:
+            log.info("client disconnected (gone before response)")
+        except (BrokenPipeError, ConnectionResetError):
             log.info("client disconnected (broken pipe)")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log.exception("upstream error: %s", exc)
             try:
                 self._send_json(
@@ -1963,6 +2663,59 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except Exception:
                 pass
+
+    def _proxy_buffered_sse(
+        self,
+        path: str,
+        headers: dict[str, str],
+        body: bytes,
+        parsed: dict | None,
+        steer_messages: list[dict] | None,
+        steer_trace: dict[str, Any],
+    ) -> None:
+        """Buffered SSE (early-stop middleware) with the client kept alive.
+
+        Headers are committed first; ``: keepalive`` comments flow while the
+        engine works (including a possible retry). The final payload is a
+        complete SSE body, so nothing is ever retracted from the client.
+        """
+        log.info("[agent] sse buffered (early-stop middleware)")
+        self._sse_begin()
+        if not self._acquire_gen_lock(self._sse_tick):
+            self._sse_fail(503, "engine busy: another generation is still running")
+            return
+        try:
+            status, _resp_headers, content_type, payload = self._post_process(
+                path=path,
+                headers=headers,
+                body=body,
+                parsed=parsed,
+                steer_messages=steer_messages,
+                steer_trace=steer_trace,
+                stream=True,
+                on_tick=self._sse_tick,
+            )
+            if status != 200:
+                self._sse_fail(status, payload)
+                return
+            if "text/event-stream" not in content_type and payload.lstrip().startswith(
+                b"{"
+            ):
+                self._sse_send(b"data: " + payload.strip() + b"\n\n" + _SSE_DONE)
+                return
+            if b"[DONE]" not in payload[-64:]:
+                payload = payload.rstrip(b"\r\n") + b"\n\n" + _SSE_DONE
+            self._sse_send(payload)
+        except _ClientGone:
+            log.info("client disconnected while buffering; upstream aborted")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("upstream error (buffered sse): %s", exc)
+            try:
+                self._sse_fail(502, str(exc))
+            except _ClientGone:
+                pass
+        finally:
+            self._release_gen_lock()
 
 
 def _self_check() -> None:
@@ -2282,9 +3035,148 @@ def _self_check() -> None:
     assert _is_in_flight_error(409, busy) is True
     assert _is_in_flight_error(200, busy) is False
     assert _is_chat_path("/v1/chat/completions") is True
-    assert UPSTREAM_TIMEOUT <= 180
+    assert UPSTREAM_TIMEOUT >= 120
     assert _needs_buffered_sse({"after_tool_continue": False}) is False
     assert _needs_buffered_sse({"after_tool_continue": True}) is True
+
+    # Stability: runaway greedy completions are capped, floors still apply.
+    cap_body = {
+        "tools": [{"type": "function", "function": {"name": "bash"}}],
+        "messages": [{"role": "user", "content": "go"}],
+        "max_tokens": 32000,
+    }
+    prepare_body(cap_body)
+    assert cap_body["max_tokens"] == AGENT_MAX_TOKENS_CAP, cap_body["max_tokens"]
+    small_body = {
+        "tools": [{"type": "function", "function": {"name": "bash"}}],
+        "messages": [{"role": "user", "content": "go"}],
+        "max_tokens": 16,
+    }
+    prepare_body(small_body)
+    assert small_body["max_tokens"] == AGENT_MAX_TOKENS_FLOOR
+    alias_body = {
+        "tools": [{"type": "function", "function": {"name": "bash"}}],
+        "messages": [{"role": "user", "content": "go"}],
+        "max_completion_tokens": 100000,
+    }
+    prepare_body(alias_body)
+    assert alias_body["max_tokens"] == AGENT_MAX_TOKENS_CAP
+    assert "max_completion_tokens" not in alias_body
+    plain_body = {"messages": [{"role": "user", "content": "hi"}]}
+    prepare_body(plain_body)
+    assert "max_tokens" not in plain_body  # engine default, nothing invented
+    plain_big = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 99999}
+    prepare_body(plain_big)
+    assert plain_big["max_tokens"] == CHAT_MAX_TOKENS_CAP
+    ping_body = {"messages": [{"role": "user", "content": "PING"}], "max_tokens": 16}
+    prepare_body(ping_body)
+    assert ping_body["max_tokens"] == 16
+
+    # Compaction: detected by history length even without a prompt hint, and
+    # its decode is capped.
+    long_hist = [{"role": "system", "content": "Compress conversation context."}]
+    for i in range(20):
+        long_hist.append({"role": "user", "content": f"q{i}"})
+        long_hist.append({"role": "assistant", "content": f"a{i} " * 8})
+    comp_body = {"messages": long_hist, "max_tokens": 32768}
+    tr_comp: dict[str, Any] = {}
+    prepare_body(comp_body, tr_comp)
+    assert tr_comp["compaction"] is True
+    assert comp_body["max_tokens"] == COMPACTION_MAX_TOKENS_CAP
+    hint_body = {"messages": [{"role": "user", "content": "compress conversation context"}]}
+    assert _looks_like_compaction(hint_body) is True
+
+    # Repeat guard: same tool call three turns running -> nudge, tools gone.
+    rep_call = {
+        "id": "c1",
+        "type": "function",
+        "function": {"name": "read", "arguments": '{"filePath": "notes.md"}'},
+    }
+    rep_msgs: list[dict] = [{"role": "system", "content": "sys"}, {"role": "user", "content": "go"}]
+    for _ in range(3):
+        rep_msgs.append({"role": "assistant", "content": "Let me check the notes.", "tool_calls": [dict(rep_call)]})
+        rep_msgs.append({"role": "tool", "tool_call_id": "c1", "content": "# notes\nline"})
+    n_rep, sig_rep = _assistant_repeat_count(rep_msgs)
+    assert n_rep == 3 and sig_rep.startswith("read(")
+    rep_body = {
+        "tools": [{"type": "function", "function": {"name": "read"}}],
+        "messages": [dict(m) for m in rep_msgs],
+    }
+    tr_rep: dict[str, Any] = {}
+    prepare_body(rep_body, tr_rep)
+    assert tr_rep["repeat_count"] == 3 and tr_rep["repeat_recovery"] is True
+    assert tr_rep["repeat_no_tools"] is True and tr_rep["repeat_stop"] is False
+    assert "tools" not in rep_body and rep_body["tool_choice"] == "none"
+    assert "[Harness] REPEATED ACTION" in rep_body["messages"][0]["content"]
+    assert rep_body["messages"][0]["content"].count("[Harness] REPEATED ACTION") == 1
+    # Four in a row -> hard stop flag (the handler answers without upstream).
+    rep_msgs.append({"role": "assistant", "content": "Let me check the notes.", "tool_calls": [dict(rep_call)]})
+    rep_msgs.append({"role": "tool", "tool_call_id": "c1", "content": "# notes\nline"})
+    tr_rep4: dict[str, Any] = {}
+    prepare_body({"tools": [{"type": "function", "function": {"name": "read"}}], "messages": rep_msgs}, tr_rep4)
+    assert tr_rep4["repeat_stop"] is True and tr_rep4["repeat_count"] == 4
+    # A different call in between breaks the chain (git status before/after a
+    # commit is legitimate).
+    mixed = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [dict(rep_call)]},
+        {"role": "tool", "tool_call_id": "c1", "content": "x"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "bash", "arguments": '{"command": "git commit"}'}}]},
+        {"role": "tool", "tool_call_id": "c2", "content": "ok"},
+        {"role": "assistant", "content": "", "tool_calls": [dict(rep_call)]},
+        {"role": "tool", "tool_call_id": "c1", "content": "x"},
+    ]
+    assert _assistant_repeat_count(mixed)[0] == 1
+    # Identical prose (no tools) also counts; tiny acks do not.
+    prose_rep = [{"role": "user", "content": "a"}] + [
+        {"role": "assistant", "content": "I will check the directory and report back shortly."}
+    ] * 3
+    assert _assistant_repeat_count(prose_rep)[0] == 3
+    assert _assistant_repeat_count([{"role": "assistant", "content": "Done."}] * 5)[0] == 0
+    stop_txt = _sse_text_payload("halt", "m", "rid")
+    assert b'"finish_reason": "stop"' in stop_txt and stop_txt.endswith(_SSE_DONE)
+    assert json.loads(_json_text_payload("halt", "m", "rid"))["choices"][0]["message"]["content"] == "halt"
+
+    # Context trim: oldest groups go first, tool_call/tool pairs stay intact,
+    # the tail is untouched, a note is appended to the system prompt.
+    trim_msgs: list[dict] = [{"role": "system", "content": "sys"}, {"role": "user", "content": "start"}]
+    for i in range(6):
+        trim_msgs.append({"role": "assistant", "content": "", "tool_calls": [{"id": f"t{i}", "type": "function", "function": {"name": "read", "arguments": "{}"}}]})
+        trim_msgs.append({"role": "tool", "tool_call_id": f"t{i}", "content": "x" * 5000})
+    trim_msgs.append({"role": "user", "content": "final question"})
+    dropped = _trim_history_to_budget(trim_msgs, budget=16000)
+    # 'start' user message + whole assistant/tool pairs -> odd count, >= 3.
+    assert dropped >= 3 and dropped % 2 == 1, dropped
+    assert trim_msgs[-1]["content"] == "final question"
+    roles_after = [m["role"] for m in trim_msgs]
+    assert roles_after[0] == "system" and "dropped" in trim_msgs[0]["content"]
+    for i, m in enumerate(trim_msgs):
+        if m["role"] == "tool":
+            assert trim_msgs[i - 1]["role"] == "assistant" and trim_msgs[i - 1].get("tool_calls")
+    assert _trim_history_to_budget([{"role": "user", "content": "short"}], budget=1000) == 0
+
+    # SSE plumbing: in-band error is a terminal, parseable event.
+    err = _sse_error_payload(503, b'{"error":{"message":"busy"}}')
+    assert err.startswith(b"data: ") and err.endswith(_SSE_DONE)
+    evt = json.loads(err.split(b"\n\n")[0][len(b"data: "):])
+    assert evt["error"]["message"] == "busy" and evt["error"]["code"] == 503
+    err2 = _sse_error_payload(502, "socket closed")
+    assert b"socket closed" in err2
+    # A half-streamed upstream body must not be echoed back as the error text.
+    err3 = _sse_error_payload(502, b'data: {"id":"x","object":"chat.completion.chunk","choices":[]}\n\n: keep-alive\n\n')
+    evt3 = json.loads(err3.split(b"\n\n")[0][len(b"data: "):])
+    assert "aborted mid-response" in evt3["error"]["message"]
+    assert "chat.completion.chunk" not in evt3["error"]["message"]
+    assert _sse_at_event_boundary(b"") is True
+    assert _sse_at_event_boundary(b"data: {}\n\n") is True
+    assert _sse_at_event_boundary(b"data: {\"cho") is False
+    assert _SSE_KEEPALIVE.startswith(b":") and _SSE_KEEPALIVE.endswith(b"\n\n")
+
+    # Engine lock: RLock with timeout works and busy flag mirrors it.
+    assert _UPSTREAM_GEN_LOCK.acquire(timeout=0.01) is True
+    _UPSTREAM_GEN_LOCK.release()
+    assert _UPSTREAM_GEN_LOCK_BUSY.is_set() is False
+    assert LOCK_WAIT_TIMEOUT > 0 and _env_int("QWEN38_OBL_UNSET_TEST", 900) == 900
 
 
 def main(argv: list[str] | None = None) -> int:

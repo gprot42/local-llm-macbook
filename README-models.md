@@ -14,7 +14,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 |-------|--------|-------|-------|
 | **Qwen 3.6 27B mtplx** | `censored/qwen3-6-27b-coder-mtplx/` | **Text only** | Coding default; native MTP heads |
 | **Qwen 3.8 27B mtplx** | `censored/qwen3-8-27b-coder-mtplx/` | **Text only** | Next 27B; harness ready; weights when published |
-| **Qwen 3.8 27B OBLITERATED mtplx** | `uncensored/archived/qwen3-8-27b-obliterated-mtplx/` | **Text only** | Archived / **unstable**; Kilo hangs; mlx-4bit ~14 GB |
+| **Qwen 3.8 27B OBLITERATED mtplx** | `uncensored/qwen3-8-27b-obliterated-mtplx/` | **Text only** | Uncensored; hardened Kilo proxy on :8768; mlx-4bit ~14 GB |
 | **Muse Glimmer 30B** | `censored/muse-glimmer-30b-mlx/` | **Text + image** | Meta MSL agentic 30B; mlx-vlm + official DFlash |
 | **DeepSeek V4 Flash ds4** | `censored/deepseek-v4-flash-ds4/` | **Text only** | Native Metal GGUF |
 | **DeepSeek V4 Flash MLX** | `censored/deepseek-v4-flash-2bit-dq-mlx/` | **Text only** | mlx-lm community path |
@@ -264,7 +264,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 
 ## Uncensored
 
-### Qwen 3.8 27B OBLITERATED — mtplx (`uncensored/archived/qwen3-8-27b-obliterated-mtplx/`)
+### Qwen 3.8 27B OBLITERATED — mtplx (`uncensored/qwen3-8-27b-obliterated-mtplx/`)
 
 | | |
 |--|--|

@@ -48,25 +48,51 @@
     "read": "allow",
     "edit": "allow",
     "glob": "allow",
-    "bash": "allow"
+    "bash": {
+      "*": "ask",
+      "ls *": "allow",
+      "pwd *": "allow",
+      "cat *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "less *": "allow",
+      "tree *": "allow",
+      "echo *": "allow",
+      "wc *": "allow",
+      "which *": "allow",
+      "type *": "allow",
+      "file *": "allow",
+      "diff *": "allow",
+      "touch *": "allow",
+      "mkdir *": "allow",
+      "cp *": "allow",
+      "mv *": "allow",
+      "tsc *": "allow",
+      "tsgo *": "allow",
+      "tar *": "allow",
+      "unzip *": "allow",
+      "gzip *": "allow",
+      "gunzip *": "allow",
+      "adb *": "allow"
+    }
   },
   "provider": {
     "mtplx-qwen38-obl": {
-      "name": "mtplx Qwen3.8 OBLITERATED (archived, unstable)",
+      "name": "mtplx Qwen3.8 OBLITERATED (hardened proxy)",
       "options": {
         "apiKey": "local",
         "baseURL": "http://127.0.0.1:8768/v1",
-        "timeout": 900000,
-        "headerTimeout": 180000,
-        "chunkTimeout": 300000
+        "timeout": 1200000,
+        "headerTimeout": 60000,
+        "chunkTimeout": 60000
       },
       "models": {
         "qwen3.8-27b-obliterated-mtplx": {
-          "name": "Qwen3.8 27B OBLITERATED — mtplx MTP (archived, unstable)",
+          "name": "Qwen3.8 27B OBLITERATED — mtplx MTP",
           "tool_call": true,
           "limit": {
-            "context": 131072,
-            "output": 32768
+            "context": 49152,
+            "output": 4096
           }
         }
       }

@@ -17,7 +17,33 @@
     "read": "allow",
     "edit": "allow",
     "glob": "allow",
-    "bash": "allow"
+    "bash": {
+      "*": "ask",
+      "ls *": "allow",
+      "pwd *": "allow",
+      "cat *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "less *": "allow",
+      "tree *": "allow",
+      "echo *": "allow",
+      "wc *": "allow",
+      "which *": "allow",
+      "type *": "allow",
+      "file *": "allow",
+      "diff *": "allow",
+      "touch *": "allow",
+      "mkdir *": "allow",
+      "cp *": "allow",
+      "mv *": "allow",
+      "tsc *": "allow",
+      "tsgo *": "allow",
+      "tar *": "allow",
+      "unzip *": "allow",
+      "gzip *": "allow",
+      "gunzip *": "allow",
+      "adb *": "allow"
+    }
   },
   "provider": {
     "ornith": {

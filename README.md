@@ -27,7 +27,7 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 |--------|--------------------------|------|------------|-----|
 | [`uncensored/gemma4-jang-crack-31b-mlx/`](uncensored/gemma4-jang-crack-31b-mlx/) | `openai-compatible/gemma-4-31b-jang-crack-mlx` | 🟡 Uncensored chat (JANG) | **Text + image** | `:8080/v1` |
 | [`uncensored/gemma4-server-heretic-31b-mlx/`](uncensored/gemma4-server-heretic-31b-mlx/) | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` | 🟢 Uncensored chat (Heretic) | **Text + image** | `:8080/v1` |
-| [`uncensored/archived/qwen3-8-27b-obliterated-mtplx/`](uncensored/archived/qwen3-8-27b-obliterated-mtplx/) | `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` | 📦🟡 Archived **unstable** — OBLITERATUS 27B (Kilo hangs / session-in-flight) | Text | `:8768/v1` (proxy) |
+| [`uncensored/qwen3-8-27b-obliterated-mtplx/`](uncensored/qwen3-8-27b-obliterated-mtplx/) | `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` | 🟡 Uncensored OBLITERATUS 27B — hardened Kilo proxy (greedy, thinking off) | Text | `:8768/v1` (proxy) |
 | [`uncensored/archived/qwen3-32b-heretic-mlx/`](uncensored/archived/qwen3-32b-heretic-mlx/) | `qwen3-heretic/qwen3-32b-heretic-mlx-5bit` | 📦 Archived uncensored dense 32B (MLX; not 3.6/3.7) | Text | `:8084/v1` |
 | [`uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/) | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` | 📦 Archived (weights removed) | Text | `:8085/v1` |
 | [`uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/) | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` | 📦 Archived DFlash (weights removed) | Text | `:8086/v1` |
@@ -117,7 +117,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 |---|--------|----------|-----------------|
 | 🟡 | [`uncensored/gemma4-jang-crack-31b-mlx/`](uncensored/gemma4-jang-crack-31b-mlx/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-jang-crack-mlx` |
 | 🟢 | [`uncensored/gemma4-server-heretic-31b-mlx/`](uncensored/gemma4-server-heretic-31b-mlx/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` |
-| 📦🟡 | [`uncensored/archived/qwen3-8-27b-obliterated-mtplx/`](uncensored/archived/qwen3-8-27b-obliterated-mtplx/) | `http://127.0.0.1:8768/v1` | `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` |
+| 🟡 | [`uncensored/qwen3-8-27b-obliterated-mtplx/`](uncensored/qwen3-8-27b-obliterated-mtplx/) | `http://127.0.0.1:8768/v1` | `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` |
 | 📦 | [`uncensored/archived/qwen3-32b-heretic-mlx/`](uncensored/archived/qwen3-32b-heretic-mlx/) | `http://127.0.0.1:8084/v1` | `qwen3-heretic/qwen3-32b-heretic-mlx-5bit` |
 | 📦 | [`uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/) | `http://127.0.0.1:8085/v1` | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` |
 | 📦 | [`uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/) | `http://127.0.0.1:8086/v1` | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` |
@@ -146,7 +146,7 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 
 - [gemma4-jang-crack-31b-mlx/README.md](uncensored/gemma4-jang-crack-31b-mlx/README.md) — JANG_4M CRACK (why over Heretic, no re-quantize needed)  
 - [gemma4-server-heretic-31b-mlx/README.md](uncensored/gemma4-server-heretic-31b-mlx/README.md) — Heretic + proxy · [Continue.dev](uncensored/gemma4-server-heretic-31b-mlx/README.md#continuedev)  
-- [qwen3-8-27b-obliterated-mtplx/README.md](uncensored/archived/qwen3-8-27b-obliterated-mtplx/README.md) — Qwen3.8-27B OBLITERATED V3 (archived / **unstable**; Kilo hangs)  
+- [qwen3-8-27b-obliterated-mtplx/README.md](uncensored/qwen3-8-27b-obliterated-mtplx/README.md) — Qwen3.8-27B OBLITERATED V3 (hardened Kilo proxy on :8768)  
 - [qwen3-32b-heretic-mlx/README.md](uncensored/archived/qwen3-32b-heretic-mlx/README.md) — Qwen3-32B Heretic (original Qwen3 dense, not 3.6/3.7; archived)  
 - [qwen3.5-122b-a10b-abliterated-mlx/README.md](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/README.md) — Qwen3.5-122B-A10B Abliterated MLX 4-bit (~70 GB; 128 GB recommended)  
 - [qwen3.5-122b-a10b-dflash-mlx/README.md](uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/README.md) — same target + z-lab DFlash draft (fast decode; exactness verified)  
