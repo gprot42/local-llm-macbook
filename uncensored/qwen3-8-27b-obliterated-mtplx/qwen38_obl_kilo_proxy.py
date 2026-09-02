@@ -45,6 +45,7 @@ import os
 import queue
 import re
 import select
+import shlex
 import socket
 import sys
 import threading
@@ -213,6 +214,57 @@ _RETRY_USER = (
     "[Harness] EARLY STOP: emit tool_calls for the next unfinished step now. "
     "No Next steps list. No recap. Run the next command."
 )
+# Kilo's grep tool parses `rg --json`; a matched line > 64KB (minified dist
+# bundle, package-lock.json, .map) aborts the whole search with this error.
+# Qwen then re-issues the identical grep until the repeat guard fires.
+_GREP_OVERFLOW_NEEDLES = (
+    "ripgrep json record exceeded",
+    "record exceeded 65536 bytes",
+)
+_GREP_OVERFLOW_NUDGE = (
+    "\n\n[Harness] GREP OVERFLOW: the last grep hit a >64KB line (minified "
+    "bundle / lockfile / node_modules / dist). Do NOT repeat the same grep. "
+    "Either narrow `path` to a source dir and set `include` (e.g. "
+    "\"*.{js,ts,py}\"), or run bash: rg -n --max-columns 300 "
+    "-g '!node_modules' -g '!dist' -g '!*lock*' -g '!*.min.*' PATTERN PATH."
+)
+# Kilo grep schema: pattern, path, include, ignoreCase, context, limit, literal.
+_GREP_TOOL_NAMES = frozenset({"grep", "grep_search", "search_files", "ripgrep"})
+_GREP_KNOWN_KEYS = frozenset(
+    {"pattern", "path", "include", "ignoreCase", "context", "limit", "literal"}
+)
+# Claude-Code / Cursor style parameter names the model hallucinates.
+_GREP_KEY_ALIASES = {
+    "glob": "include",
+    "file_pattern": "include",
+    "filePattern": "include",
+    "regex": "pattern",
+    "query": "pattern",
+    "-i": "ignoreCase",
+    "case_insensitive": "ignoreCase",
+    "caseInsensitive": "ignoreCase",
+    "-C": "context",
+    "-A": "context",
+    "-B": "context",
+    "head_limit": "limit",
+    "max_results": "limit",
+    "maxResults": "limit",
+    "fixed_strings": "literal",
+    "-F": "literal",
+}
+_RG_EXCLUDE_GLOBS = (
+    "!node_modules",
+    "!dist",
+    "!build",
+    "!out",
+    "!.git",
+    "!*lock*",
+    "!*.min.*",
+    "!*.map",
+    "!*.wasm",
+)
+_RG_MAX_COLUMNS = 300
+_RG_DEFAULT_LIMIT = 100
 _PLAN_SCRIPT_RE = re.compile(
     r"(?:ONEPHONE_I_CONFIRM=1\s+)?(?:\./)?tools/[\w.-]+\.sh"
 )
@@ -726,6 +778,7 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
         "repeat_stop": False,
         "repeat_what": "",
         "trimmed_msgs": 0,
+        "grep_overflow_recovery": False,
     }
     if not messages:
         return trace
@@ -743,7 +796,17 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
     trace["fake_action"] = fake
     trace["prose_loop"] = prose
     streak_min = int(cfg.get("empty_streak_min") or 1)
-    if streak >= streak_min and cfg.get("mw_empty_tool", True):
+    grep_overflow = _last_tool_was_grep_overflow(messages)
+    if grep_overflow and cfg.get("mw_grep_overflow", True):
+        _strip_nudge(messages, _AFTER_TOOL_NUDGE)
+        _nudge_system(
+            messages,
+            "[Harness] GREP OVERFLOW:",
+            _GREP_OVERFLOW_NUDGE,
+            "grep-overflow recovery",
+        )
+        trace["grep_overflow_recovery"] = True
+    elif streak >= streak_min and cfg.get("mw_empty_tool", True):
         if _last_tool_was_missing_path(messages) and _nudge_system(
             messages,
             "[Harness] MISSING PATH:",
@@ -1140,6 +1203,201 @@ def _last_tool_was_missing_path(messages: list[dict] | None) -> bool:
         if role == "user":
             return False
     return False
+
+
+def _tool_result_is_grep_overflow(text: str) -> bool:
+    low = (text or "").lower()
+    return any(needle in low for needle in _GREP_OVERFLOW_NEEDLES)
+
+
+def _last_tool_was_grep_overflow(messages: list[dict] | None) -> bool:
+    """True when the most recent tool result (since the last user turn) is the
+    Kilo grep ``Ripgrep JSON record exceeded 65536 bytes`` failure."""
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role in ("tool", "function"):
+            return _tool_result_is_grep_overflow(_message_text(msg))
+        if role == "user":
+            return False
+    return False
+
+
+def _coerce_bool(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _coerce_int(val: Any, default: int | None = None) -> int | None:
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _repair_grep_args(args: dict) -> dict:
+    """Map hallucinated Claude-Code/Cursor grep params onto Kilo's schema and
+    drop the unknown ones (``output_mode``, ``-n``, ``multiline``, ...)."""
+    out: dict = {}
+    for key, val in args.items():
+        k = _GREP_KEY_ALIASES.get(key, key)
+        if k == "type" and isinstance(val, str) and val.strip():
+            k, val = "include", f"*.{val.strip().lstrip('.')}"
+        if k not in _GREP_KNOWN_KEYS:
+            continue
+        if k in ("ignoreCase", "literal"):
+            val = _coerce_bool(val)
+        elif k in ("context", "limit"):
+            val = _coerce_int(val)
+            if val is None:
+                continue
+        elif k == "path" and (val is None or str(val).strip() in ("", ".")):
+            continue
+        out[k] = val
+    if "pattern" not in out and "pattern" in args:
+        out["pattern"] = args["pattern"]
+    return out
+
+
+_QUESTION_ITEM_KEYS = frozenset({"question", "header", "options", "multiple"})
+_QUESTION_OPTION_KEYS = frozenset({"label", "description"})
+_QUESTION_HEADER_MAX = 30
+
+
+def _question_option(item, idx: int) -> dict | None:
+    """Coerce one option into Kilo's ``{label, description}`` shape.
+    Small models emit bare strings, ``{value,text}`` or ``{name}`` dicts."""
+    if isinstance(item, str):
+        label = item.strip()
+        desc = ""
+    elif isinstance(item, dict):
+        label = str(
+            item.get("label")
+            or item.get("value")
+            or item.get("name")
+            or item.get("title")
+            or item.get("text")
+            or ""
+        ).strip()
+        desc = str(item.get("description") or item.get("desc") or "").strip()
+    else:
+        label = str(item).strip() if item is not None else ""
+        desc = ""
+    if not label:
+        return None
+    out = {"label": label[:200], "description": desc or label}
+    if isinstance(item, dict):
+        for k in ("mode", "labelKey", "descriptionKey"):
+            if isinstance(item.get(k), str):
+                out[k] = item[k]
+    return out
+
+
+def _question_item(item, idx: int) -> dict | None:
+    if isinstance(item, str):
+        item = {"question": item}
+    if not isinstance(item, dict):
+        return None
+    text = str(
+        item.get("question") or item.get("prompt") or item.get("text") or ""
+    ).strip()
+    raw_opts = item.get("options")
+    if raw_opts is None:
+        raw_opts = item.get("choices") or item.get("answers") or []
+    if isinstance(raw_opts, (str, dict)):
+        raw_opts = [raw_opts]
+    if not isinstance(raw_opts, list):
+        raw_opts = []
+    opts = [o for o in (_question_option(o, i) for i, o in enumerate(raw_opts)) if o]
+    seen: set[str] = set()
+    opts = [o for o in opts if not (o["label"] in seen or seen.add(o["label"]))]
+    if not text and not opts:
+        return None
+    if not text:
+        text = "Which option?"
+    if not opts:
+        # Kilo requires options; a bare free-text question is still useful.
+        opts = [
+            {"label": "Yes", "description": "Confirm"},
+            {"label": "No", "description": "Decline"},
+        ]
+    header = str(item.get("header") or item.get("title") or "").strip()
+    if not header:
+        # Prefer the "Topic:" prefix, else cut at a word boundary.
+        lead = text.split(":", 1)[0].strip() if ":" in text else ""
+        header = lead if 0 < len(lead) <= _QUESTION_HEADER_MAX else text
+        header = re.sub(r"[?:.!]+$", "", header).strip() or "Question"
+    if len(header) > _QUESTION_HEADER_MAX:
+        cut = header[:_QUESTION_HEADER_MAX]
+        header = (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip(" ,;:-")
+    out: dict = {"question": text, "header": header, "options": opts}
+    if "multiple" in item:
+        out["multiple"] = bool(_coerce_bool(item.get("multiple")))
+    for k in ("headerKey", "questionKey"):
+        if isinstance(item.get(k), str):
+            out[k] = item[k]
+    return out
+
+
+def _repair_question_args(args: dict) -> dict:
+    """Normalize a ``question`` tool call onto Kilo's schema:
+    ``{questions: [{question, header<=30, options: [{label, description}]}]}``.
+    Handles the recurring local-model failures: missing header/options,
+    options as bare strings, a single top-level ``question`` string, ``id``
+    and other unknown keys."""
+    raw = args.get("questions")
+    if raw is None:
+        if any(k in args for k in ("question", "prompt", "text", "options", "choices")):
+            raw = [args]
+        else:
+            raw = []
+    if isinstance(raw, (str, dict)):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raw = []
+    items = [q for q in (_question_item(q, i) for i, q in enumerate(raw)) if q]
+    if not items:
+        return args
+    return {"questions": items}
+
+
+def _grep_to_rg_command(args: dict) -> str | None:
+    """Build a bash ``rg`` command equivalent to a Kilo grep call, with the
+    globs/columns guards that avoid the 64KB JSON record abort."""
+    pattern = str(args.get("pattern") or "")
+    if not pattern:
+        return None
+    parts = [
+        "rg",
+        "-n",
+        "--no-heading",
+        "--max-columns",
+        str(_RG_MAX_COLUMNS),
+        "--max-columns-preview",
+    ]
+    if _coerce_bool(args.get("ignoreCase", False)):
+        parts.append("-i")
+    if _coerce_bool(args.get("literal", False)):
+        parts.append("-F")
+    ctx = _coerce_int(args.get("context"), 0) or 0
+    if ctx > 0:
+        parts += ["-C", str(ctx)]
+    include = str(args.get("include") or "").strip()
+    if include:
+        parts += ["-g", shlex.quote(include)]
+    for g in _RG_EXCLUDE_GLOBS:
+        parts += ["-g", shlex.quote(g)]
+    parts.append("--")
+    parts.append(shlex.quote(pattern))
+    path = str(args.get("path") or "").strip()
+    if path:
+        parts.append(shlex.quote(path))
+    limit = _coerce_int(args.get("limit"), _RG_DEFAULT_LIMIT) or _RG_DEFAULT_LIMIT
+    return " ".join(parts) + f" | head -n {limit}"
 
 
 def _workspace_entry_exists(
@@ -1775,10 +2033,47 @@ def _repair_one_tool_call(
                 "path",
             )
             return {**args, field: resolved}
+    if lname in _GREP_TOOL_NAMES:
+        fixed = _repair_grep_args(args)
+        if fixed != args:
+            dropped = sorted(set(args) - set(fixed))
+            log.info("[grep-repair] keys %s → %s", dropped, sorted(fixed))
+            return fixed
+    if lname in {"question", "ask_question", "ask_followup_question"}:
+        fixed = _repair_question_args(args)
+        if fixed != args:
+            log.info(
+                "[question-repair] %d question(s), keys %s → schema",
+                len(fixed.get("questions") or []),
+                sorted(args),
+            )
+            return fixed
     return args
 
 
-def _repair_tool_calls_list(tcs: list, messages: list[dict] | None) -> bool:
+def _convert_overflow_grep(
+    name: str, args: dict, messages: list[dict] | None
+) -> tuple[str, dict] | None:
+    """After a Kilo grep died on a >64KB line, re-issue the same search as a
+    guarded bash ``rg`` (excludes node_modules/dist/lockfiles, caps columns)
+    instead of letting the model repeat the failing grep."""
+    lname = (name or "").lower().replace("-", "_")
+    if lname not in _GREP_TOOL_NAMES:
+        return None
+    if not _last_tool_was_grep_overflow(messages):
+        return None
+    cmd = _grep_to_rg_command(args)
+    if not cmd:
+        return None
+    log.info("[grep-overflow] grep → bash %r", cmd[:120])
+    return "bash", {"command": cmd, "description": "rg search (grep overflow guard)"}
+
+
+def _repair_tool_calls_list(
+    tcs: list, messages: list[dict] | None, *, response: bool = True
+) -> bool:
+    """Repair tool-call arguments in place. ``response=False`` for history
+    rewrites: only argument fixes apply there, never tool renames."""
     changed = False
     for tc in tcs:
         if not isinstance(tc, dict):
@@ -1813,6 +2108,11 @@ def _repair_tool_calls_list(tcs: list, messages: list[dict] | None) -> bool:
         if repaired != parsed:
             fn["arguments"] = json.dumps(repaired, ensure_ascii=False)
             changed = True
+        converted = _convert_overflow_grep(name, repaired, messages) if response else None
+        if converted:
+            fn["name"], new_args = converted
+            fn["arguments"] = json.dumps(new_args, ensure_ascii=False)
+            changed = True
     return changed
 
 
@@ -1821,7 +2121,7 @@ def _repair_history_tool_calls(messages: list[dict]) -> None:
         if isinstance(msg, dict) and msg.get("role") == "assistant":
             tcs = msg.get("tool_calls")
             if isinstance(tcs, list):
-                _repair_tool_calls_list(tcs, messages)
+                _repair_tool_calls_list(tcs, messages, response=False)
 
 
 def _try_close_json(s: str) -> str | None:

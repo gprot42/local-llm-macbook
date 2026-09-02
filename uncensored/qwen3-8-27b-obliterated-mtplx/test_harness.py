@@ -1379,6 +1379,172 @@ def run_unit_tests(report: Report) -> None:
             nested.get("path") == "analysis/SEMGREP-DOMAIN-C.md",
             str(nested),
         )
+        # grep: hallucinated Claude-Code params are mapped/dropped
+        grep_fixed = proxy._repair_one_tool_call(
+            "grep",
+            {
+                "pattern": "turnLeft",
+                "path": "src",
+                "output_mode": "content",
+                "-n": True,
+                "-C": 3,
+                "glob": "*.js",
+                "-i": "true",
+            },
+            ws_msgs,
+        )
+        report.check(
+            "unit: grep foreign params → Kilo schema",
+            grep_fixed
+            == {
+                "pattern": "turnLeft",
+                "path": "src",
+                "context": 3,
+                "include": "*.js",
+                "ignoreCase": True,
+            },
+            str(grep_fixed),
+        )
+        # question: missing header/options (seen 2026-09-02 10:11)
+        q_bare = proxy._repair_one_tool_call(
+            "question",
+            {"questions": [{"id": "mp", "question": "Online multiplayer: what is the target?"}]},
+            ws_msgs,
+        )
+        q0 = (q_bare.get("questions") or [{}])[0]
+        report.check(
+            "unit: question missing header/options → filled",
+            set(q0) >= {"question", "header", "options"}
+            and "id" not in q0
+            and len(q0["header"]) <= 30
+            and len(q0["options"]) >= 2
+            and all(set(o) >= {"label", "description"} for o in q0["options"]),
+            str(q_bare),
+        )
+        # question: options as bare strings (seen 2026-09-02 10:18)
+        q_str = proxy._repair_one_tool_call(
+            "question",
+            {
+                "questions": [
+                    {
+                        "header": "Online multiplayer",
+                        "id": "mp",
+                        "options": ["What is the target?", "Design first", "Large scope"],
+                        "question": "Online multiplayer: what is the target?",
+                    }
+                ]
+            },
+            ws_msgs,
+        )
+        q1 = (q_str.get("questions") or [{}])[0]
+        report.check(
+            "unit: question string options → {label, description}",
+            [o["label"] for o in q1.get("options", [])]
+            == ["What is the target?", "Design first", "Large scope"]
+            and all("description" in o for o in q1["options"])
+            and q1["header"] == "Online multiplayer",
+            str(q_str),
+        )
+        # question: single top-level question + choices alias
+        q_top = proxy._repair_one_tool_call(
+            "question",
+            {"question": "Continue?", "choices": [{"value": "yes"}, {"name": "no"}]},
+            ws_msgs,
+        )
+        report.check(
+            "unit: question top-level/choices → questions[]",
+            [o["label"] for o in q_top["questions"][0]["options"]] == ["yes", "no"],
+            str(q_top),
+        )
+        # question: already valid → untouched
+        q_ok = {
+            "questions": [
+                {
+                    "header": "Pick",
+                    "question": "Pick one",
+                    "options": [{"label": "A", "description": "a"}],
+                }
+            ]
+        }
+        report.check(
+            "unit: valid question untouched",
+            proxy._repair_one_tool_call("question", q_ok, ws_msgs) == q_ok,
+        )
+        overflow_msgs = ws_msgs + [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "grep",
+                            "arguments": json.dumps({"pattern": "turnLeft", "path": "src"}),
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "Error: Ripgrep JSON record exceeded 65536 bytes",
+            },
+        ]
+        report.check(
+            "unit: grep overflow detected",
+            proxy._last_tool_was_grep_overflow(overflow_msgs)
+            and not proxy._last_tool_was_grep_overflow(ws_msgs),
+            "detector",
+        )
+        tcs = [
+            {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                    "name": "grep",
+                    "arguments": json.dumps(
+                        {"pattern": "turnLeft", "path": "src", "output_mode": "content"}
+                    ),
+                },
+            }
+        ]
+        changed = proxy._repair_tool_calls_list(tcs, overflow_msgs)
+        conv_args = json.loads(tcs[0]["function"]["arguments"])
+        conv_cmd = str(conv_args.get("command", ""))
+        report.check(
+            "unit: repeated grep after overflow → guarded bash rg",
+            changed
+            and tcs[0]["function"]["name"] == "bash"
+            and conv_cmd.startswith("rg -n")
+            and "--max-columns 300" in conv_cmd
+            and "'!node_modules'" in conv_cmd
+            and "turnLeft src" in conv_cmd
+            and "| head -n 100" in conv_cmd,
+            conv_cmd,
+        )
+        hist = [
+            {
+                "id": "call_3",
+                "type": "function",
+                "function": {
+                    "name": "grep",
+                    "arguments": json.dumps({"pattern": "x", "path": "src"}),
+                },
+            }
+        ]
+        proxy._repair_tool_calls_list(hist, overflow_msgs, response=False)
+        report.check(
+            "unit: history grep never renamed on overflow",
+            hist[0]["function"]["name"] == "grep",
+            hist[0]["function"]["name"],
+        )
+        ov_trace = proxy.apply_loop_middleware(json.loads(json.dumps(overflow_msgs)))
+        report.check(
+            "unit: grep overflow middleware nudge",
+            ov_trace.get("grep_overflow_recovery") is True,
+            str(ov_trace),
+        )
     try:
         import autosaddler as _as
 
