@@ -27,8 +27,14 @@ This proxy sits in front of mtplx and:
      rounds since the last user message, then the nudge is stripped so
      the model can recap and stop.
   9. Serialize chat generations and drop client session-affinity headers.
-     mtplx raises 409 "session … already in flight" when Kilo retries the
-     same sticky session while a stream is still running; retry that 409.
+      mtplx raises 409 "session … already in flight" when Kilo retries the
+      same sticky session while a stream is still running; retry that 409.
+  10. Language enforcement (2026-09-02): the OBLITERATED fine-tune drifts
+      into Chinese on English prompts (measured: full Chinese session
+      recaps). An English-only directive rides every chat request, and a
+      reply that comes back CJK is regenerated once with a hard nudge —
+      early-aborted on the SSE path (nothing forwarded yet), plain re-fetch
+      on the buffered / non-stream paths. Kill switch: QWEN38_OBL_ENGLISH=0.
 
 
 Usage:
@@ -134,8 +140,95 @@ LOOP_PREFIX = (
     "the job done. Tool calls must be real tool_calls, never prose like "
     "'[Calling tool: ...]'. Never repeat an identical tool call; its result "
     "is already above. For 'what does X do' questions read only the file "
-    "header (read with limit=150), not the whole file.\n\n"
+    "header (read with limit=150), not the whole file. Reply in English "
+    "only — never Chinese/CJK prose; quote foreign text only verbatim.\n\n"
 )
+
+# Language enforcement. The OBLITERATED fine-tune is Chinese-heavy and
+# answers English prompts in Chinese (2026-09-02: whole session recaps in
+# Chinese at 28 tok/s). Belt and braces: (1) an English-only system
+# directive on every chat request, (2) a CJK reply is regenerated once
+# with a hard nudge — early-abort on the SSE path (the first window of
+# content is held back, so nothing was forwarded), re-fetch on the
+# buffered / non-stream paths. Kill switch: QWEN38_OBL_ENGLISH=0.
+ENGLISH_GUARD = (
+    os.environ.get("QWEN38_OBL_ENGLISH", "1").strip().lower()
+    not in ("0", "false", "off")
+)
+_ENGLISH_ONLY_DIRECTIVE = (
+    "\n\n[Harness] ENGLISH ONLY: reply in English exclusively. Never write "
+    "Chinese, Japanese, or Korean. Every heading, list, summary, question, "
+    "and explanation must be in English. Keep another language only inside "
+    "verbatim quotes from files or command output."
+)
+_LANG_RETRY_NUDGE = (
+    "\n\n[Harness] LANGUAGE FAILURE: your previous reply was in Chinese "
+    "(CJK). Write the SAME answer again, entirely in English. English only — "
+    "no Chinese words or characters outside verbatim quotes."
+)
+_CJK_RE = re.compile(
+    "[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]"
+)
+_CJK_MIN_CHARS = 8             # fewer CJK chars is quoting, not a language flip
+_CJK_MIN_LEN = 24             # do not judge tiny interjections
+_CJK_RATIO = 0.30             # CJK share of letters that counts as a flip
+CJK_CANCEL_WINDOW_CHARS = 64  # streamed prefix held back while deciding
+
+
+def _is_mostly_cjk(text: str) -> bool:
+    t = (text or "").strip()
+    if len(t) < _CJK_MIN_LEN:
+        return False
+    cjk = len(_CJK_RE.findall(t))
+    if cjk < _CJK_MIN_CHARS:
+        return False
+    letters = sum(1 for ch in t if ch.isalpha())
+    return letters > 0 and cjk / letters >= _CJK_RATIO
+
+
+def _inject_english_directive(body: dict) -> None:
+    if not ENGLISH_GUARD:
+        return
+    msgs = body.get("messages")
+    if not isinstance(msgs, list):
+        return
+    _nudge_system(
+        msgs,
+        "[Harness] ENGLISH ONLY:",
+        _ENGLISH_ONLY_DIRECTIVE,
+        "english-only directive",
+    )
+
+
+def _apply_language_retry(body: dict) -> None:
+    """Second chance after a CJK reply: same history + hard English nudge."""
+    msgs = body.get("messages")
+    if not isinstance(msgs, list):
+        return
+    _nudge_system(
+        msgs,
+        "[Harness] LANGUAGE FAILURE:",
+        _LANG_RETRY_NUDGE,
+        "language retry",
+    )
+
+
+def _split_sse_events(buf: bytes) -> tuple[list[bytes], bytes]:
+    """Complete SSE events (each ends with a blank line) + leftover bytes."""
+    events: list[bytes] = []
+    rest = buf
+    while True:
+        i = rest.find(b"\n\n")
+        j = rest.find(b"\r\n\r\n")
+        if i < 0 and j < 0:
+            break
+        if j >= 0 and (i < 0 or j < i):
+            events.append(rest[: j + 4])
+            rest = rest[j + 4 :]
+        else:
+            events.append(rest[: i + 2])
+            rest = rest[i + 2 :]
+    return events, rest
 
 # AutoSaddler TB2 infra patch: raise tool-output room, still cap context.
 TOOL_RESULT_MAX_CHARS = 30_000
@@ -1069,6 +1162,7 @@ def prepare_body(body: dict, trace: dict | None = None) -> dict:
             # actually decode at a usable speed.
             tr["truncated_tool_msgs"] = _truncate_tool_messages(msgs)
             tr["trimmed_msgs"] = _trim_history_to_budget(msgs)
+        _inject_english_directive(body)
         tr["compaction"] = True
         return body
 
@@ -1078,6 +1172,7 @@ def prepare_body(body: dict, trace: dict | None = None) -> dict:
             body, floor=AGENT_MAX_TOKENS_FLOOR, cap=AGENT_MAX_TOKENS_CAP
         )
         _inject_loop_prompt(body)
+        _inject_english_directive(body)
         tr["loop_prompt"] = True
         msgs = body.get("messages")
         if isinstance(msgs, list):
@@ -1095,6 +1190,7 @@ def prepare_body(body: dict, trace: dict | None = None) -> dict:
     else:
         # Plain chat / title generation: still bound a runaway greedy loop,
         # but leave an absent max_tokens to the engine default.
+        _inject_english_directive(body)
         _cap_max_tokens(body, cap=CHAT_MAX_TOKENS_CAP)
     return body
 
@@ -2493,6 +2589,7 @@ class Handler(BaseHTTPRequestHandler):
                         "frequency_penalty": CARD_FREQUENCY_PENALTY,
                         "enable_thinking": False,
                     },
+                    "english_only": ENGLISH_GUARD,
                     "limits": {
                         "max_tokens_cap": AGENT_MAX_TOKENS_CAP,
                         "upstream_timeout": UPSTREAM_TIMEOUT,
@@ -2676,9 +2773,19 @@ class Handler(BaseHTTPRequestHandler):
         return last
 
     def _stream_passthrough(
-        self, path: str, body: bytes, headers: dict[str, str]
+        self,
+        path: str,
+        body: bytes,
+        headers: dict[str, str],
+        parsed: dict | None = None,
+        steer_trace: dict[str, Any] | None = None,
     ) -> None:
-        """Forward SSE as it arrives; headers + keepalives go out immediately."""
+        """Forward SSE as it arrives; headers + keepalives go out immediately.
+
+        A reply that STARTS in CJK is aborted (the cancel window is held
+        back, nothing forwarded) and regenerated once with the English-only
+        nudge.
+        """
         chat = _is_chat_path(path)
         self._sse_begin()
         if chat and not self._acquire_gen_lock(self._sse_tick):
@@ -2686,23 +2793,41 @@ class Handler(BaseHTTPRequestHandler):
             return
         fetch: _UpstreamFetch | None = None
         try:
-            fetch = _UpstreamFetch(self.state, self.command, path, body, headers)
-            fetch.wait_ready(self._sse_tick)
-            status = int(fetch.status or 502)
-            if status != 200 or "text/event-stream" not in fetch.content_type:
-                payload = b"".join(fetch.iter_chunks(self._sse_tick))
-                if status == 200 and "application/json" in fetch.content_type:
-                    # Upstream ignored stream=true; hand the JSON over as-is
-                    # inside an SSE event so the client still gets an answer.
-                    payload = _repair_response_payload(payload, None)
-                    self._sse_send(b"data: " + payload + b"\n\n" + _SSE_DONE)
+            for attempt in range(2):
+                fetch = _UpstreamFetch(self.state, self.command, path, body, headers)
+                fetch.wait_ready(self._sse_tick)
+                status = int(fetch.status or 502)
+                if status != 200 or "text/event-stream" not in fetch.content_type:
+                    payload = b"".join(fetch.iter_chunks(self._sse_tick))
+                    if status == 200 and "application/json" in fetch.content_type:
+                        # Upstream ignored stream=true; hand the JSON over as-is
+                        # inside an SSE event so the client still gets an answer.
+                        payload = _repair_response_payload(payload, None)
+                        self._sse_send(b"data: " + payload + b"\n\n" + _SSE_DONE)
+                        return
+                    self._sse_fail(status, payload)
                     return
-                self._sse_fail(status, payload)
-                return
-            for chunk in fetch.iter_chunks(self._sse_tick):
-                self._sse_send(chunk)
-            if not getattr(self, "_sse_sent", b"").endswith(b"\n\n"):
-                self._sse_send(b"\n\n")
+                verdict = self._relay_sse_with_cjk_guard(
+                    fetch,
+                    allow_retry=(
+                        attempt == 0
+                        and ENGLISH_GUARD
+                        and chat
+                        and parsed is not None
+                        and not (steer_trace or {}).get("lang_retried")
+                    ),
+                )
+                if verdict != "retry":
+                    return
+                log.info("[agent] CJK stream start: regenerating in English")
+                fetch.abort()
+                fetch.join()
+                fetch = None
+                _apply_language_retry(parsed)  # type: ignore[arg-type]
+                if steer_trace is not None:
+                    steer_trace["lang_retried"] = True
+                body = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+                headers["Content-Length"] = str(len(body))
         except _ClientGone:
             log.info("client disconnected mid-stream; aborting upstream")
             if fetch is not None:
@@ -2718,6 +2843,50 @@ class Handler(BaseHTTPRequestHandler):
                 fetch.join()
             if chat:
                 self._release_gen_lock()
+
+    def _relay_sse_with_cjk_guard(
+        self, fetch: _UpstreamFetch, *, allow_retry: bool
+    ) -> str:
+        """Stream upstream SSE to the client, event by event.
+
+        While the answer is still inside the cancel window (no tool_calls
+        seen, under ``CJK_CANCEL_WINDOW_CHARS`` of content) events are held
+        back. If the text is CJK there, return "retry" — the client has only
+        seen keepalives, nothing to retract. Otherwise flush the held events
+        and stream the rest straight through. Returns "done".
+        """
+        pending = b""
+        held = b""
+        acc = ""
+        saw_tools = False
+        decided = not allow_retry
+        for chunk in fetch.iter_chunks(self._sse_tick):
+            pending += chunk
+            events, pending = _split_sse_events(pending)
+            for event in events:
+                if decided:
+                    self._sse_send(event)
+                    continue
+                text, tools = _sse_text_and_tools(event)
+                saw_tools = saw_tools or tools
+                acc += text
+                held += event
+                if saw_tools or len(acc) >= CJK_CANCEL_WINDOW_CHARS:
+                    decided = True
+                    if not saw_tools and _is_mostly_cjk(acc):
+                        return "retry"
+                    self._sse_send(held)
+                    held = b""
+        if not decided:
+            if _is_mostly_cjk(acc):
+                return "retry"
+            if held:
+                self._sse_send(held)
+        if pending:
+            self._sse_send(pending)
+        if not getattr(self, "_sse_sent", b"").endswith(b"\n\n"):
+            self._sse_send(b"\n\n")
+        return "done"
 
     # ---- middleware decision -------------------------------------------
 
@@ -2740,6 +2909,33 @@ class Handler(BaseHTTPRequestHandler):
         if status != 200:
             return status, resp_headers, content_type, payload
         is_sse = stream or "text/event-stream" in content_type
+        if (
+            ENGLISH_GUARD
+            and parsed is not None
+            and _is_chat_path(path)
+            and not steer_trace.get("lang_retried")
+        ):
+            if is_sse:
+                text, has_tools = _sse_text_and_tools(payload)
+            elif "application/json" in content_type:
+                text, has_tools = _json_text_and_tools(payload)
+            else:
+                text, has_tools = "", True
+            if not has_tools and _is_mostly_cjk(text):
+                log.info(
+                    "[agent] CJK reply (%d chars): regenerating in English",
+                    len(text),
+                )
+                _apply_language_retry(parsed)
+                steer_trace["lang_retried"] = True
+                body = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+                headers["Content-Length"] = str(len(body))
+                status, resp_headers, content_type, payload = self._fetch_buffered(
+                    path, body, headers, on_tick
+                )
+                if status != 200:
+                    return status, resp_headers, content_type, payload
+                is_sse = stream or "text/event-stream" in content_type
         want_retry = (
             parsed is not None
             and steer_trace.get("after_tool_continue")
@@ -2903,7 +3099,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if stream and not _needs_buffered_sse(steer_trace):
                 log.info("[agent] sse passthrough")
-                self._stream_passthrough(path, body, headers)
+                self._stream_passthrough(path, body, headers, parsed, steer_trace)
                 return
             if stream:
                 self._proxy_buffered_sse(
@@ -3385,6 +3581,58 @@ def _self_check() -> None:
     assert comp_body["max_tokens"] == COMPACTION_MAX_TOKENS_CAP
     hint_body = {"messages": [{"role": "user", "content": "compress conversation context"}]}
     assert _looks_like_compaction(hint_body) is True
+
+    # Language: English-only directive on every chat request; CJK detection.
+    lang_plain = {"messages": [{"role": "user", "content": "总结这个项目"}]}
+    tr_lang: dict[str, Any] = {}
+    prepare_body(lang_plain, tr_lang)
+    assert "[Harness] ENGLISH ONLY:" in lang_plain["messages"][0]["content"]
+    prepare_body(lang_plain, tr_lang)  # idempotent (Kilo retries same body)
+    assert lang_plain["messages"][0]["content"].count("[Harness] ENGLISH ONLY:") == 1
+    lang_agent = {
+        "tools": [{"type": "function", "function": {"name": "bash"}}],
+        "messages": [
+            {"role": "system", "content": "You are a coding agent."},
+            {"role": "user", "content": "go"},
+        ],
+        "max_tokens": 128,
+    }
+    tr_lang2: dict[str, Any] = {}
+    prepare_body(lang_agent, tr_lang2)
+    assert "[Harness] ENGLISH ONLY:" in lang_agent["messages"][0]["content"]
+    comp_lang = {
+        "tool_choice": "none",
+        "messages": [{"role": "user", "content": "compress conversation context"}],
+    }
+    prepare_body(comp_lang)
+    assert "[Harness] ENGLISH ONLY:" in comp_lang["messages"][0]["content"]
+    assert _is_mostly_cjk(
+        "工作回顾：这是 Titan M2 研究环境的现状总结，包含全部关键信息与下一步。"
+    ) is True
+    assert _is_mostly_cjk(
+        "Work review: the Titan M2 harness is healthy and all gates pass."
+    ) is False
+    assert _is_mostly_cjk("Status: 完成 (done) — see REPORT.md for the details.") is False
+    lang_retry_body = {
+        "messages": [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+        ]
+    }
+    _apply_language_retry(lang_retry_body)
+    _apply_language_retry(lang_retry_body)
+    assert (
+        lang_retry_body["messages"][0]["content"].count(
+            "[Harness] LANGUAGE FAILURE:"
+        )
+        == 1
+    )
+    evs, rest = _split_sse_events(b'data: {"a":1}\n\ndata: {"b"')
+    assert len(evs) == 1 and evs[0].endswith(b"\n\n") and rest == b'data: {"b"'
+    evs, rest = _split_sse_events(b"data: 1\n\ndata: 2\n\n")
+    assert len(evs) == 2 and rest == b""
+    evs, rest = _split_sse_events(b"data: 1\r\n\r\ndata: 2\n\n")
+    assert len(evs) == 2 and rest == b""
 
     # Repeat guard: same tool call three turns running -> nudge, tools gone.
     rep_call = {

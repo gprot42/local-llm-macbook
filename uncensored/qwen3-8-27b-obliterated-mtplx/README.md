@@ -80,7 +80,7 @@ Kilo Code (TUI)
 |------|---------|
 | `1_setup_download.sh` | venv + mtplx + **V3 bf16 snapshot + local MLX convert**; writes `.mtplx_config` |
 | `2_start_mtplx.sh` | mtplx on `:8767` + kilo proxy on `:8768`; optional `--harness-gate` |
-| `qwen38_obl_kilo_proxy.py` | Card sampling + scoped loop middleware (empty/fake-action/prose-loop/JIT continue) |
+| `qwen38_obl_kilo_proxy.py` | Card sampling + scoped loop middleware (empty/fake-action/prose-loop/JIT continue) + **English-only enforcement** (CJK replies are detected and regenerated once; `QWEN38_OBL_ENGLISH=0` disables) |
 | `test_harness.py` | Live API smoke + real tool-loop mini-batch (hits `:8768`) |
 | `kilo.json` | Kilo provider: `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` → `:8768/v1` |
 
