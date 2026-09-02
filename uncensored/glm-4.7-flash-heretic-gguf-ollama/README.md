@@ -69,6 +69,20 @@ Three defences, all in this repo:
 3. **`limit.output` 32768** in `kilo.json`, capping how large a single buffered
    tool call can grow.
 
+### Reasoning-only turns ("...ended the response before returning usable output")
+
+GLM-4.7-Flash is a thinking model, and it sometimes ends a turn inside the
+reasoning channel: it either stops right after thinking or spends its whole
+output budget on reasoning, leaving `content` empty with no tool call. Kilo
+treats that as an incomplete response, retries twice, then fails with
+`The provider repeatedly ended the response before returning usable output.`
+
+`openai_proxy.py` recovers this: when a completion ends with reasoning but no
+content and no tool call, the proxy promotes the reasoning into a `content`
+delta (streaming) or field (non-streaming), so the client gets usable output
+and the model's work is not discarded. Turns that already produce content or a
+tool call are passed through untouched. Disable with `--no-reasoning-fallback`.
+
 ### Logs
 
 | File | Contents |
