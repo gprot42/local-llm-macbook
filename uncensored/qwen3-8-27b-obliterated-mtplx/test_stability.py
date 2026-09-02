@@ -131,7 +131,9 @@ def check(name: str, cond: bool, detail: str = "") -> bool:
 def main() -> int:
     up = ThreadingHTTPServer(("127.0.0.1", UP_PORT), Fake)
     threading.Thread(target=up.serve_forever, daemon=True).start()
-    env = dict(os.environ, QWEN38_OBL_LOCK_WAIT="6", QWEN38_OBL_MAX_TOKENS="4096")
+    env = dict(os.environ, QWEN38_OBL_LOCK_WAIT="6", QWEN38_OBL_MAX_TOKENS="4096",
+               QWEN38_OBL_THINKING="1", QWEN38_OBL_REASONING_EFFORT="medium",
+               QWEN38_OBL_THINKING_BUDGET="1024")  # floor 3072 < cap 4096
     px = subprocess.Popen(
         [sys.executable, PROXY, "--port", str(PX_PORT), "--upstream", f"http://127.0.0.1:{UP_PORT}"],
         env=env,
@@ -165,7 +167,8 @@ def main() -> int:
             out[:180].decode("utf-8", "replace"),
         )
         ok &= check("max_tokens clamped upstream", SEEN[-1].get("max_tokens") == 4096, str(SEEN[-1].get("max_tokens")))
-        ok &= check("card sampling forced", SEEN[-1].get("temperature") == 0 and SEEN[-1].get("enable_thinking") is False)
+        ok &= check("card sampling forced", SEEN[-1].get("temperature") == 0 and SEEN[-1].get("top_p") == 1.0)
+        ok &= check("thinking ON for tool turn", SEEN[-1].get("enable_thinking") is True and SEEN[-1].get("reasoning_effort") == "medium", str(SEEN[-1].get("reasoning_effort")))
 
         # 2. buffered SSE round (after a tool result within first 3 rounds)
         SEEN.clear()

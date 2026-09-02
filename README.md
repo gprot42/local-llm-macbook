@@ -56,7 +56,7 @@ cd censored/qwen3-6-27b-coder-mtplx
 
 Other stacks: `1_*` setup/download → `2_*` start → select the model ID for that folder (table above). Details in each directory’s README.
 
-**Kilo config layers:** monorepo root [`kilo.json`](kilo.json) is the global source of truth (providers + default model + harness prompts). Install it with **`./install_kilo.sh`** → `~/.config/kilo/kilo.jsonc`. Stack folders also have a local `kilo.json` (used when you launch Kilo from that directory). When changing harness rules or the default model for everyone, edit **root** `kilo.json` and re-run `./install_kilo.sh` — not only a stack file. Current default: **`muse-glimmer/muse-glimmer-30b-mlx`**.
+**Kilo config layers:** monorepo root [`kilo.json`](kilo.json) is the global source of truth (providers + default model + harness prompts). Install it with **`./install_kilo.sh`** → `~/.config/kilo/kilo.jsonc`. Stack folders also have a local `kilo.json` (used when you launch Kilo from that directory). When changing harness rules or the default model for everyone, edit **root** `kilo.json` and re-run `./install_kilo.sh` — not only a stack file. The shared `Conclude decisively` block is the exception: it is inline in 18 agent prompts across four `kilo.json` files (Kilo's `instructions` resolves against the opened project, so it cannot reach them). Edit it once in [`AGENTS.md`](AGENTS.md) and run **`./sync_agent_prompts.py`**; `install_kilo.sh` refuses to install if a copy has drifted. Current default: **`muse-glimmer/muse-glimmer-30b-mlx`**.
 
 ---
 

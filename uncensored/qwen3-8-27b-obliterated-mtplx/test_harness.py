@@ -15,7 +15,8 @@ Usage:
   python3 test_harness.py --model qwen3.8-27b-obliterated-mtplx
 
 Sampling matches the OBLITERATUS card: temperature=0, top_p=1.0,
-thinking off, frequency_penalty=0.3 (mtplx stand-in for HF repetition_penalty=1.15).
+frequency_penalty=0.3 (mtplx stand-in for HF repetition_penalty=1.15).
+Thinking is proxy-owned: ON for tool turns (bounded budget), OFF for chat.
 We do NOT fully emulate Kilo (no session DB, compaction UI, permissions).
 
 Agent-loop tests execute allowlisted tools in a temp workspace and diagnose
@@ -47,7 +48,8 @@ from urllib.parse import urlparse
 
 DEFAULT_BASE = "http://127.0.0.1:8768"
 DEFAULT_MODEL = "qwen3.8-27b-obliterated-mtplx"
-# OBLITERATUS card (HF): greedy, no thinking, empty system, no top_p/top_k.
+# OBLITERATUS card (HF): greedy, empty system, no top_p/top_k. Thinking is
+# the proxy's call (on for tool turns since 2026-09-02).
 # repetition_penalty=1.15 is essential against import/boilerplate loops.
 # mtplx has no that flag — OpenAI frequency_penalty=0.3 is this stack's mapping.
 DEFAULT_TEMPERATURE = 0.0
@@ -245,12 +247,16 @@ def _sample_fields(
     temperature: float = DEFAULT_TEMPERATURE,
     extra: dict | None = None,
 ) -> dict[str, Any]:
-    """Card sampling: greedy, no thinking, HF 1.15 via frequency_penalty."""
+    """Card sampling: greedy, HF 1.15 via frequency_penalty.
+
+    ``enable_thinking`` is deliberately NOT sent: the proxy owns it (ON for
+    tool turns with a bounded budget, OFF for plain chat / compaction) and
+    overrides whatever a client sends, exactly as it does for Kilo.
+    """
     body: dict[str, Any] = {
         "temperature": temperature,
         "top_p": DEFAULT_TOP_P,
         "frequency_penalty": DEFAULT_FREQUENCY_PENALTY,
-        "enable_thinking": False,
     }
     if extra:
         body.update(extra)
@@ -1176,6 +1182,33 @@ def run_unit_tests(report: Report) -> None:
     proxy = _load_proxy()
     proxy._self_check()
     report.check("unit: proxy self-check", True, "sampling + scoped hooks")
+    # Thinking contract (2026-09-02): tool turns think (bounded), chat does not.
+    think_tools = {
+        "enable_thinking": False,  # client says off; proxy owns it
+        "max_tokens": 1024,
+        "tools": [{"type": "function", "function": {"name": "bash"}}],
+        "messages": [{"role": "user", "content": "do the thing"}],
+    }
+    proxy.prepare_body(think_tools)
+    think_chat = {
+        "enable_thinking": True,  # client says on; proxy turns it off for chat
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "title"}],
+    }
+    proxy.prepare_body(think_chat)
+    report.check(
+        "unit: thinking ON for tool turns, OFF for chat",
+        think_tools["enable_thinking"] is proxy.THINKING
+        and (not proxy.THINKING or think_tools.get("reasoning_effort") in proxy._REASONING_EFFORT_CHOICES)
+        and think_chat["enable_thinking"] is False
+        and "reasoning_effort" not in think_chat,
+        f"effort={think_tools.get('reasoning_effort')} budget={proxy.THINKING_BUDGET}",
+    )
+    report.check(
+        "unit: agent max_tokens floor covers the thinking budget",
+        think_tools["max_tokens"] >= 2048 + (proxy.THINKING_BUDGET if proxy.THINKING else 0),
+        str(think_tools["max_tokens"]),
+    )
     broken = 'grep -rn "autohunt'
     sanitized = proxy._sanitize_bash_command(broken)
     report.check(
@@ -1260,7 +1293,7 @@ def run_unit_tests(report: Report) -> None:
         {"role": "system", "content": "You are a coding agent."},
         {"role": "user", "content": "proceed with the research"},
     ]
-    for i in range(1, 5):
+    for i in range(1, proxy.AFTER_TOOL_NUDGE_MAX + 2):
         cap_msgs.append(
             {
                 "role": "assistant",
@@ -1286,7 +1319,7 @@ def run_unit_tests(report: Report) -> None:
     tr_cap: dict = {}
     proxy.prepare_body(cap_body, tr_cap)
     report.check(
-        "unit: after-tool cap at 4 rounds",
+        f"unit: after-tool cap at {proxy.AFTER_TOOL_NUDGE_MAX + 1} rounds",
         tr_cap.get("after_tool_continue") is False
         and "[Harness] Tool result received."
         not in cap_body["messages"][0]["content"],
@@ -1772,7 +1805,7 @@ def _self_check() -> None:
     assert sample["temperature"] == 0.0, sample
     assert sample["top_p"] == 1.0, sample
     assert sample["frequency_penalty"] == 0.3, sample
-    assert sample["enable_thinking"] is False, sample
+    assert "enable_thinking" not in sample, sample
     looped = _with_agent_loop([{"role": "user", "content": "x"}])
     assert looped[0]["role"] == "system" and "1 of N" in looped[0]["content"]
     assert "Verify with a tool" in looped[0]["content"]
@@ -1836,7 +1869,7 @@ def main(argv: list[str] | None = None) -> int:
     print("  Note: this is NOT a full Kilo emulator.")
     print(
         "  sampling: temperature=0 top_p=1.0 frequency_penalty=0.3 "
-        "enable_thinking=false"
+        "(thinking: proxy-owned — on for tool turns, off for chat)"
     )
     _self_check()
 

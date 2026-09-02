@@ -48,6 +48,11 @@ Finish multi-step work:
   (bash ls/echo, glob, grep, or read) on a real path. Do not curl|grep remote HTML.
 
 Answer pure Q&A briefly; multi-step tasks must keep using tools until done.
+
+Conclude decisively: brevity limits padding, not substance. Every final reply
+ends with a definitive conclusion (direct answer, root cause, or verified
+result). Never end with an acknowledgement or partial observation; do not hedge
+when you can check with a tool.
 """
 
 # Subset of Kilo-ish tool names (schemas only; we stub execution).

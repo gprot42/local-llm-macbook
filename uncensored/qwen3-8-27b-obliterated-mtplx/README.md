@@ -1,6 +1,6 @@
 # Qwen3.8-27B OBLITERATED V3 — mtplx MTP Server + harness
 
-**Status: 📦 archived / 🟡 unstable.** Kilo agent loops hang (session-in-flight, 10+ min Thinking spinner, Next-steps recap loops). Not recommended as a daily driver.
+**Status: 📦 archived / 🟡 unstable.** Kilo agent loops hang (session-in-flight, 10+ min Thinking spinner, Next-steps recap loops). Not recommended as a daily driver. 2026-09-02: thinking is now ON for tool turns (see [Thinking](#thinking-2026-09-02)); re-evaluate after a few sessions.
 
 Uncensored **Qwen3.8-27B V3** via [OBLITERATUS](https://huggingface.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED)
 (weight-space refusal removal of [`Qwen/Qwen3.8-27B`](https://huggingface.co/Qwen/Qwen3.8-27B)),
@@ -65,7 +65,8 @@ Kilo Code (TUI)
       │
       ▼  http://localhost:8768/v1   (kilo proxy — card sampling forced)
   qwen38_obl_kilo_proxy.py
-      │  temp=0  frequency_penalty=0.3  thinking off  finish-the-job loop
+      │  temp=0  frequency_penalty=0.3  thinking ON for tool turns (medium, 4096-tok budget)
+      │  finish-the-job loop middleware
       ▼  http://127.0.0.1:8767/v1
   mtplx serve
       │  ↑ MTP speculative decoding (checkpoint has mtp_num_hidden_layers=1)
@@ -79,8 +80,8 @@ Kilo Code (TUI)
 | File | Purpose |
 |------|---------|
 | `1_setup_download.sh` | venv + mtplx + **V3 bf16 snapshot + local MLX convert**; writes `.mtplx_config` |
-| `2_start_mtplx.sh` | mtplx on `:8767` + kilo proxy on `:8768`; optional `--harness-gate` |
-| `qwen38_obl_kilo_proxy.py` | Card sampling + scoped loop middleware (empty/fake-action/prose-loop/JIT continue) + **English-only enforcement** (CJK replies are detected and regenerated once; `QWEN38_OBL_ENGLISH=0` disables) |
+| `2_start_mtplx.sh` | mtplx on `:8767` + kilo proxy on `:8768`; optional `--harness-gate`; exports the thinking env (effort/budget) to engine + proxy |
+| `qwen38_obl_kilo_proxy.py` | Card sampling + scoped loop middleware (empty/fake-action/prose-loop/JIT continue) + **first-turn guard** (a plan dump instead of a tool call right after the prompt is retried, not handed back) + **English-only enforcement** (CJK replies are detected and regenerated once; `QWEN38_OBL_ENGLISH=0` disables) |
 | `test_harness.py` | Live API smoke + real tool-loop mini-batch (hits `:8768`) |
 | `kilo.json` | Kilo provider: `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` → `:8768/v1` |
 
@@ -106,14 +107,138 @@ The OBLITERATUS card says these settings matter:
 | **temperature** | **0** | greedy; temps above 0.5 degrade quality |
 | **repetition_penalty** | mtplx **`frequency_penalty=0.3`** | card 1.15; sweep on :8767: greedy + 0.3 gave the longest non-loop answers |
 | **top_p / top_k** | unused (`top_p=1.0`) | greedy; sampling not needed |
-| **enable_thinking** | **off** (`--reasoning off`) | V3 thinking ON works; OFF is still the card default for direct answers |
+| **enable_thinking** | **ON for tool turns**, off for chat/compaction (proxy-owned) | Card default is off for *direct answers*; with thinking off the agent loop was a chain of greedy no-deliberation steps (re-read the same file, recap, hand back). Tool turns now think at `reasoning_effort=medium`, bounded by the mtplx thinking guard (`MTPLX_THINKING_BUDGET=4096`). Engine `:8767` default stays off for raw curls. |
 | **system prompt** | short finish-the-job agent prompt in stack `kilo.json` | card prefers empty for chat; without a loop prompt Kilo stops after 1 of N |
-| **max_new_tokens** | card **≥ 2048** | tool-loop harness tests use 2048; PING stays tiny |
+| **max_new_tokens** | card **≥ 2048** (+ thinking budget on tool turns → floor 6144, cap 8192) | the `<think>` segment comes out of the same max_tokens; `kilo.json` `limit.output` is 8192 |
 | **agent steps** | **50** (build/code) | stack `kilo.json` had no `steps`, so the agent gave up early |
+
+**Kilo context limits (measured 2026-09-02).** Decode is ~25 tok/s at ≤30k
+prompt tokens and 2–5 tok/s past ~50k, so the global root
+[`kilo.json`](../../kilo.json) caps this model at `limit.context` **49152** /
+`limit.output` **4096**: with `compaction.reserved` 16384 that makes compaction
+fire at `context − reserved − output` ≈ **28k**, before the collapse. The stack
+`kilo.json` keeps `49152 / 8192` for single-stack use. Either way the proxy
+floors agent turns at `AGENT_MAX_TOKENS_FLOOR` (2048 + thinking budget = 6144),
+so a 4096 output cap never truncates a tool turn. Strict JSON cannot carry a
+comment — this paragraph is where that measurement lives.
 
 `2_start_mtplx.sh`, the kilo proxy, and `test_harness.py` send
 `frequency_penalty=0.3` as the mtplx mapping of HF `repetition_penalty=1.15`
 (picked from `sweep_longrun.py` for longest greedy answers without loops).
+
+### Thinking (2026-09-02)
+
+Traced root cause of "stops after light thinking, needs another prompt": the
+stack ran the model with thinking fully off (`--reasoning off` + proxy
+`enable_thinking=false`), so every agent step was a greedy reply with no
+deliberation. Live sessions showed the pattern — read a file, re-read the
+same file until the repeat guard removed the tools, or a recap after 3–5
+rounds — and a human had to type "continue". Capability before steering:
+the proxy now turns thinking **on** for requests that carry tools and leaves
+it off for compaction, title generation, plain chat and the repeat-guard
+"answer in text" turn (no budget guard applies there and a tiny `max_tokens`
+would be eaten by `<think>`).
+
+| Env (read by `2_start_mtplx.sh`, engine and proxy) | Default | Effect |
+|---|---|---|
+| `QWEN38_OBL_THINKING` | `1` | `0` restores thinking-off everywhere |
+| `QWEN38_OBL_REASONING_EFFORT` | `medium` | `low` / `medium` / `xhigh` — the Qwen3.8 template accepts exactly these |
+| `QWEN38_OBL_THINKING_BUDGET` | `4096` | reasoning tokens per agent turn; engine thinking guard (`MTPLX_THINKING_BUDGET`, exported by the start script) force-closes `<think>` at the budget so a self-doubt loop cannot hold the engine |
+| `QWEN38_OBL_CYCLE_WINDOW` / `QWEN38_OBL_CYCLE_MIN` | `8` / `3` | window of assistant tool turns / recurrences of one command that trip the loop nudge + xhigh escalation |
+| `QWEN38_OBL_CYCLE_BREAK` | `6` | recurrences that ban the command and force the break (retry, else visible stop) |
+
+The agent `max_tokens` floor is `2048 + budget`. Reasoning streams as
+`reasoning_content`; every proxy check (early-stop, CJK, repeat guard) reads
+`content` only. `restart` after changing any of these — the engine flag and
+the proxy both need a reload.
+
+```bash
+QWEN38_OBL_REASONING_EFFORT=xhigh QWEN38_OBL_THINKING_BUDGET=6144 ./2_start_mtplx.sh restart
+./2_start_mtplx.sh reload-proxy   # proxy-only reload after middleware changes (engine stays warm)
+```
+
+### Follow-through (2026-09-02, second pass)
+
+First live session with thinking on: 9 tool rounds in 90 s, then the turn
+ended — not by the model, by the harness. Two proxy limits were doing the
+quitting: the repeat guard removed the tools after the third identical
+`cat …` call (a forced text answer ends Kilo's turn), and the after-tool
+nudge cap (8 rounds) stripped the continue nudge mid-task, after which the
+stream is passthrough and no response-side check runs at all. Changes:
+
+| Mechanism | Before | Now |
+|---|---|---|
+| Duplicate tool call (response side) | forwarded; counted toward the repeat guard | caught **before** it is forwarded: one retry with a `[Harness] REPEATED ACTION` user turn that quotes the head of the result the model skipped, then a different step |
+| Repeat guard: tools removed / hard stop | 3 / 4 identical turns | **5 / 6** — last resort, not the second step |
+| After-tool nudge cap | 8 rounds | **40** (`QWEN38_OBL_AFTER_TOOL_MAX`); Kilo `steps=50` is the hard cap |
+| Rollout trace | none (only request flags) | `logs/live-trace.jsonl`: per response — last tool result head, reasoning size, content head, tool calls, finish reason, middleware flags; plus an `[out]` log line |
+
+Third pass (same day), from the first trace: the turn ended because the model
+wrote its tool call as **prose** — `<bash>\n\nls -la …; ls … | head -60` as
+plain content, no `tool_calls`. mtplx's parser only knows the Qwen
+`<tool_call>{json}</tool_call>` form, the early-stop regex saw no plan
+words, so the text passed as a final answer and Kilo ended the turn. The
+proxy now converts prose tool calls into real `tool_calls` before the
+client sees them (`[agent] prose tool call -> tool_calls`): Kilo/Cline XML
+`<tool>…</tool>` (closed or not, raw or `<key>value</key>` args mapped by
+the tool's schema), an unclosed `<tool_call>{json}`, and a reply that is
+only a shell code fence. No retry, no extra engine round.
+
+Fourth pass (from the 19:16–19:18 trace): the model no longer quit early —
+it ran 12 rounds — but it **cycled** `ls recent` → `read SUMMARY.md` →
+`tail JOURNAL.md` → back again, re-reading the same status files without
+doing the research. The repeat guard never fired because it only sees
+CONSECUTIVE identical calls, and this was a period-3 cycle (`repeat=1`
+throughout). Two additions:
+
+- **Cycle guard** (`mw_cycle_guard`): over the last `QWEN38_OBL_CYCLE_WINDOW`
+  (8) assistant tool turns, if any one tool signature recurs
+  `QWEN38_OBL_CYCLE_MIN` (3) times it fires `[Harness] LOOP DETECTED`,
+  naming the repeated commands and telling the model to take a *different*
+  forward action (or conclude) — tools are KEPT (redirect, not stop),
+  unlike the consecutive repeat guard. `cycle=N` now shows in `[steer]`.
+- **`[Tool calls: …]` / `[Calling tool: …]`** added to the prose-tool-call
+  converter — round 12 ended the turn by writing its bash call in that
+  bracketed prose form (finish=stop).
+
+Fifth pass (the cycle guard's nudge was ignored): trace 19:24-19:34 showed
+the model run `tail -c 2000 .../JOURNAL.md` eight times across 16 rounds. The
+cycle guard fired `[Harness] LOOP DETECTED` four times; the model ignored it
+and kept re-reading -- reasoning was only ~49 chars/turn (greedy, no real
+deliberation). So the harness stops asking and forces the break, on a ladder
+that keeps "keep going" options open before giving up:
+
+1. **Nudge** (`cycle_max >= QWEN38_OBL_CYCLE_MIN`, 3) -- `[Harness] LOOP
+   DETECTED`, tools kept.
+2. **Think harder** -- that turn's `reasoning_effort` is escalated to `xhigh`
+   automatically (a looping turn gets maximum deliberation to reason its way
+   out), tools kept. Shows as `xhigh` in the `[out]` line.
+3. **Ban + break** (`cycle_max >= QWEN38_OBL_CYCLE_BREAK`, 6) -- the repeated
+   command is banned response-side: one hard retry quoting its stale result;
+   if the model takes a different action the loop is broken and forwarded.
+4. **Visible stop** -- only if it repeats the banned command even after the
+   ban: the turn ends with `[Harness] Stopped: stuck in a read-only loop ...`
+   (a real message the user sees) instead of spinning forever.
+
+Regression tests: `test_cycle_break.py` (stubborn model -> visible stop) plus
+the recover branch (breaks out -> new action forwarded). The consecutive
+repeat guard's own hard stop (`REPEAT_HARD_STOP`, 6) covers the perfectly
+adjacent case with an equivalent message.
+
+**This is a capability ceiling, not just a harness bug.** At `temperature=0`
+with ~49 reasoning chars/turn the model deterministically re-derives the same
+action; the ladder breaks the loop but cannot make the model do real
+research. The two real levers remain: run at `xhigh` globally
+(`QWEN38_OBL_REASONING_EFFORT=xhigh QWEN38_OBL_THINKING_BUDGET=6144`) and give
+Kilo a concrete task ("produce an exploitability finding for path X"), not
+"continue the research".
+
+Diagnose the next early stop from the trace, not the symptom:
+
+
+```bash
+tail -n 5 logs/live-trace.jsonl | python3 -c 'import sys,json; [print(json.dumps(json.loads(l), indent=1)[:1500]) for l in sys.stdin]'
+```
 
 ## Harness
 
@@ -156,7 +281,7 @@ if you want `./2_start_mtplx.sh optimize`.
 
 | Patch kind (AutoSaddler) | Here |
 |--------------------------|------|
-| Agent loop logic (capability) | Empty-tool recovery, fake-action recovery, prose-loop recovery; JIT continue for the first 3 tool rounds after the user, then the nudge is stripped; Next-steps dumps retry at most once and never re-run a synthetic command already in history |
+| Agent loop logic (capability) | Empty-tool recovery, fake-action recovery, prose-loop recovery; JIT continue for the first 40 tool rounds after the user (`QWEN38_OBL_AFTER_TOOL_MAX`), then the nudge is stripped; a Next-steps/plan dump with no tool_calls is retried once per turn on the **first reply after the prompt** and on every nudged tool round, never re-running a synthetic command already in history. Plain answers pass through with one upstream call. Harness flags: `mw_first_turn`, `mw_early_stop`, `mw_after_tool` |
 | Infra (capability) | Cap tool outputs at 30k chars; repair truncated tool-call JSON; bash-sanitize only *broken* commands (keep `cd && ./script`, `which`, pipes) |
 | Tool descriptions (steering) | Harness schemas say *when* to glob/grep/read vs bash |
 | Prompt (steering) | Short finish-the-job + verify-before-done in `kilo.json` (replacement, not stacked rules) |

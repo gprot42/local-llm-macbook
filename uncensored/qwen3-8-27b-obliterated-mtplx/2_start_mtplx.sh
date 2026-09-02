@@ -10,6 +10,7 @@
 # Everyday:
 #   ./2_start_mtplx.sh             start (or attach) + smoke-check, then kilo
 #   ./2_start_mtplx.sh restart     reload engine + proxy
+#   ./2_start_mtplx.sh reload-proxy  reload ONLY the proxy (new middleware; engine stays warm)
 #   ./2_start_mtplx.sh check       smoke-check a server that is already up
 #   ./2_start_mtplx.sh check-agent longer train/dev tool-loop eval
 #   ./2_start_mtplx.sh stop | status
@@ -25,6 +26,10 @@
 #   --no-harness-gate  Skip post-start harness gate
 #   --no-proxy      Bind mtplx on --port only (not agent-safe)
 #   --help, -h      Show this help
+#
+# Env (thinking on agent turns — see the Defaults block):
+#   QWEN38_OBL_THINKING=0 | QWEN38_OBL_REASONING_EFFORT=low|medium|xhigh
+#   QWEN38_OBL_THINKING_BUDGET=4096
 #   * burst is an alias for --profile performance-cold --max
 # =============================================================================
 set -euo pipefail
@@ -42,6 +47,7 @@ DEPTH=3
 MODEL_OVERRIDE=""
 MAX_FANS=false
 DO_RESTART=false
+DO_RELOAD_PROXY=false
 DO_STOP=false
 DO_STATUS=false
 DO_CHECK=false
@@ -50,6 +56,20 @@ HARNESS_GATE=true
 USE_PROXY=true
 PROXY_PY="${SCRIPT_DIR}/qwen38_obl_kilo_proxy.py"
 PROXY_PID=""
+# Thinking on agent turns (2026-09-02). The proxy turns enable_thinking ON for
+# tool turns (OFF for compaction/title/chat); the engine bounds each <think>
+# segment with its thinking guard so a self-doubt loop cannot hold the engine.
+# Both sides read the same env vars so they never disagree:
+#   QWEN38_OBL_THINKING=0                 thinking off everywhere (old behaviour)
+#   QWEN38_OBL_REASONING_EFFORT=medium    low | medium | xhigh (Qwen3.8 template)
+#   QWEN38_OBL_THINKING_BUDGET=4096       reasoning tokens per agent turn
+export QWEN38_OBL_THINKING="${QWEN38_OBL_THINKING:-1}"
+export QWEN38_OBL_REASONING_EFFORT="${QWEN38_OBL_REASONING_EFFORT:-medium}"
+export QWEN38_OBL_THINKING_BUDGET="${QWEN38_OBL_THINKING_BUDGET:-4096}"
+case "${QWEN38_OBL_REASONING_EFFORT}" in
+    low|medium|xhigh) ;;
+    *) echo "ERROR: QWEN38_OBL_REASONING_EFFORT must be low|medium|xhigh (got '${QWEN38_OBL_REASONING_EFFORT}')"; exit 1 ;;
+esac
 
 stop_server_on_port() {
     local port="$1"
@@ -183,10 +203,11 @@ i=0; args=("$@")
 while [[ $i -lt ${#args[@]} ]]; do
     case "${args[$i]}" in
         --help|-h)
-            sed -n '3,30p' "$0" | sed 's/^# \?//'
+            awk 'NR<3{next} /^# =+$/{exit} {print}' "$0" | sed 's/^#[[:space:]]\{0,1\}//'
             exit 0
             ;;
         restart)      DO_RESTART=true;                       ((i+=1)) ;;
+        reload-proxy) DO_RELOAD_PROXY=true;                  ((i+=1)) ;;
         stop)         DO_STOP=true;                          ((i+=1)) ;;
         status)       DO_STATUS=true;                        ((i+=1)) ;;
         check)        DO_CHECK=true;                         ((i+=1)) ;;
@@ -297,6 +318,22 @@ fi
 export PATH="${VENV_DIR}/bin:${PATH}"
 hash -r 2>/dev/null || true
 source "${VENV_DIR}/bin/activate"
+
+# ── reload-proxy (engine must already be up) ──────────────────────────────────
+if [[ "${DO_RELOAD_PROXY}" == true ]]; then
+    if ! mtplx_healthy "${PORT}"; then
+        echo "ERROR: engine is not up on :${PORT}. Use: ./2_start_mtplx.sh"
+        exit 2
+    fi
+    echo "→ reload-proxy: restarting kilo proxy on :${PROXY_PORT} (engine :${PORT} left running)"
+    stop_server_on_port "${PROXY_PORT}"
+    start_kilo_proxy
+    disown "${PROXY_PID}" 2>/dev/null || true
+    if [[ "${HARNESS_GATE}" == true ]]; then
+        run_harness "--gate" || true
+    fi
+    exit 0
+fi
 
 # ── check / check-agent (server must already be up) ───────────────────────────
 if [[ "${DO_CHECK}" == true || "${DO_CHECK_AGENT}" == true ]]; then
@@ -446,7 +483,27 @@ if [[ "${USE_PROXY}" == true ]]; then
 else
     echo "→ API:      http://localhost:${PORT}/v1  (--no-proxy)"
 fi
-echo "→ Sampling: temperature=0 frequency_penalty=0.3 reasoning=off (OBLITERATUS card)"
+# Normalise like the proxy does (.strip().lower()); bash 3.2 has no ${v,,}.
+_think_norm="$(printf '%s' "${QWEN38_OBL_THINKING}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+if [[ "${_think_norm}" =~ ^(0|false|off)$ ]]; then
+    THINK_DESC="off"
+    REASONING_ARGS=(--reasoning off)
+else
+    THINK_DESC="on for tool turns (effort=${QWEN38_OBL_REASONING_EFFORT}, budget=${QWEN38_OBL_THINKING_BUDGET} tok)"
+    # Engine default stays off so raw :${PORT} curls give direct answers; the
+    # proxy switches thinking on per request. The reasoning budget is set via
+    # env: `mtplx serve` (cli.py) does not expose --agent-thinking-budget (that
+    # flag lives on the inner server argparse only), but the thinking guard
+    # reads MTPLX_THINKING_BUDGET and enables itself from it even when the
+    # flag is off. It only engages on requests that carry tools AND have
+    # thinking enabled (agent turns).
+    export MTPLX_THINKING_BUDGET="${QWEN38_OBL_THINKING_BUDGET}"
+    REASONING_ARGS=(
+        --reasoning off
+        --reasoning-effort "${QWEN38_OBL_REASONING_EFFORT}"
+    )
+fi
+echo "→ Sampling: temperature=0 frequency_penalty=0.3 (OBLITERATUS card); thinking ${THINK_DESC}"
 echo ""
 echo "→ Starting mtplx serve ..."
 echo ""
@@ -460,7 +517,7 @@ SERVE_CMD=(
     --default-temperature 0
     --default-top-p 1.0
     --default-frequency-penalty 0.3
-    --reasoning off
+    "${REASONING_ARGS[@]}"
     --model-id "${MODEL_ALIAS}"
 )
 [[ "${MAX_FANS}" == "true" ]] && SERVE_CMD+=(--max)

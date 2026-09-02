@@ -102,6 +102,13 @@ if "/" not in model or model.split("/", 1)[0] not in providers:
     raise SystemExit(f"ERROR: {path} model {model!r} does not reference a defined provider")
 PY
 
+# The shared `Conclude decisively` block is inline in 18 agent prompts across
+# four kilo.json files (Kilo's `instructions` cannot reach them -- see
+# AGENTS.md). Refuse to install a root config whose copy has drifted.
+if [[ -x "$ROOT/sync_agent_prompts.py" ]]; then
+  "$ROOT/sync_agent_prompts.py" --check
+fi
+
 mkdir -p "$DEST_DIR"
 if [[ -f "$DEST" ]]; then
   bak="$DEST.bak.$(date +%Y%m%d-%H%M%S)"

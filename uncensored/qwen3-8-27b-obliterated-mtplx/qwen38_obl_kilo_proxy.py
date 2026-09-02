@@ -8,8 +8,11 @@ That overrides mtplx ``--default-temperature 0`` and the OBLITERATUS card
 This proxy sits in front of mtplx and:
 
   1. Forces card sampling: temperature=0, top_p=1.0, frequency_penalty=0.3
-     (mtplx stand-in for HF repetition_penalty=1.15), enable_thinking=false
-  2. Floors max_tokens at 2048 on agentic (tools) turns
+     (mtplx stand-in for HF repetition_penalty=1.15). Thinking is ON for
+     tool turns (reasoning_effort medium by default, bounded by the engine's
+     MTPLX_THINKING_BUDGET guard) and OFF for compaction / title / plain chat.
+     See THINKING / REASONING_EFFORT / THINKING_BUDGET below.
+  2. Floors max_tokens at 2048 (+ the thinking budget) on agentic turns
   3. Prepends a short finish-the-job loop nudge on tool turns
   4. Strips tools on Kilo compaction / summary
   5. Soft-repairs truncated tool-call argument JSON
@@ -20,13 +23,14 @@ This proxy sits in front of mtplx and:
      only (unmatched quotes, invented paths, command substitution, missing
      cat/head files). Do not rewrite cd/&&, env=value ./script, which, pipes,
      or 2>/dev/null — those were causing the agent to stop after dummy ls/head
-  8. Response-side early-stop: after a tool result, if the model dumps a
-     Next-steps/plan with no tool_calls, retry once (mtplx: tool_choice
-     auto|none only). Synthesize a plan script at most once; never repeat
-     a command already in history. After-tool JIT nudges cap at 3 tool
-     rounds since the last user message, then the nudge is stripped so
-     the model can recap and stop.
-  9. Serialize chat generations and drop client session-affinity headers.
+   8. Response-side early-stop: after a tool result, if the model dumps a
+      Next-steps/plan with no tool_calls, retry once (mtplx: tool_choice
+      auto|none only). Synthesize a plan script at most once; never repeat
+      a command already in history. After-tool JIT nudges cap at 3 tool
+      rounds since the last user message, then the nudge is stripped so
+      the model can recap and stop. The forced retry covers every nudged
+      round (EARLY_STOP_FORCE_MAX == AFTER_TOOL_NUDGE_MAX).
+   9. Serialize chat generations and drop client session-affinity headers.
       mtplx raises 409 "session … already in flight" when Kilo retries the
       same sticky session while a stream is still running; retry that 409.
   10. Language enforcement (2026-09-02): the OBLITERATED fine-tune drifts
@@ -35,6 +39,12 @@ This proxy sits in front of mtplx and:
       reply that comes back CJK is regenerated once with a hard nudge —
       early-aborted on the SSE path (nothing forwarded yet), plain re-fetch
       on the buffered / non-stream paths. Kill switch: QWEN38_OBL_ENGLISH=0.
+  11. First-turn guard (2026-09-02): the very first reply after a user
+      prompt on an agent (tools) turn is buffered and run through the same
+      early-stop check as tool rounds. Before this, an "I'll start by… /
+      Next steps:" dump with no tool_calls ended Kilo's turn and the task
+      sat idle until a human typed "continue". Plain answers pass through
+      unchanged (one upstream call). Harness flag: mw_first_turn.
 
 
 Usage:
@@ -78,7 +88,6 @@ LOG_FILE = (
 CARD_TEMPERATURE = 0.0
 CARD_TOP_P = 1.0
 CARD_FREQUENCY_PENALTY = 0.3
-AGENT_MAX_TOKENS_FLOOR = 2048
 
 
 def _env_int(name: str, default: int) -> int:
@@ -89,10 +98,43 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+# Thinking on agent turns (2026-09-02). Live Titan M2 sessions: with thinking
+# forced OFF every step was a greedy no-deliberation reply -- the model read a
+# file, re-read the same file until the repeat guard took its tools away, or
+# handed back a recap after a few rounds, and a human had to type "continue".
+# Capability before steering (AutoSaddler): give the model room to reason
+# through the whole task before it acts. Qwen3.8's template accepts exactly
+# low / medium / xhigh; the reasoning segment is bounded by mtplx's thinking
+# guard (MTPLX_THINKING_BUDGET, exported by 2_start_mtplx.sh), so a self-doubt loop
+# cannot hold the engine. Scope: requests that carry tools. Compaction, title
+# generation, plain chat and the repeat-guard "answer in text" turn stay
+# thinking-off (no budget guard applies there; a tiny max_tokens would be
+# eaten by <think>). Kill switch: QWEN38_OBL_THINKING=0.
+THINKING = (
+    os.environ.get("QWEN38_OBL_THINKING", "1").strip().lower()
+    not in ("0", "false", "off")
+)
+_REASONING_EFFORT_CHOICES = ("low", "medium", "xhigh")
+
+
+def _env_effort(default: str = "medium") -> str:
+    raw = os.environ.get("QWEN38_OBL_REASONING_EFFORT", "").strip().lower()
+    return raw if raw in _REASONING_EFFORT_CHOICES else default
+
+
+REASONING_EFFORT = _env_effort()
+# Must match the engine's MTPLX_THINKING_BUDGET (the start script exports
+# the same env var to both). Tokens of <think> per agent turn.
+THINKING_BUDGET = _env_int("QWEN38_OBL_THINKING_BUDGET", 4096)
+# The card asks for >= 2048 visible tokens; with thinking on, the reasoning
+# segment comes out of the same max_tokens, so the floor grows by the budget.
+AGENT_MAX_TOKENS_FLOOR = (2048 + THINKING_BUDGET) if THINKING else 2048
+
+
 # Stability: a greedy 27B that starts looping at max_tokens=32000 holds the
 # engine for 20+ minutes. Kilo's turn loop re-prompts anyway, so cap one
 # completion here (the card only asks for >= 2048).
-AGENT_MAX_TOKENS_CAP = _env_int("QWEN38_OBL_MAX_TOKENS", 8192)
+AGENT_MAX_TOKENS_CAP = max(_env_int("QWEN38_OBL_MAX_TOKENS", 8192), AGENT_MAX_TOKENS_FLOOR)
 # No-tool chat (title, plain Q&A) and compaction decode at ~5 tok/s once the
 # prompt is large: 8192 tokens is 25+ minutes. Measured compaction summaries
 # are ~600 tokens; 1536 leaves headroom and bounds the worst case to ~5 min.
@@ -114,9 +156,15 @@ _TRIM_NOTE = "[proxy: {n} older messages dropped to fit the local context window
 #   >= REPEAT_NO_TOOLS   -> nudge + tools removed (forces a final text answer,
 #                           which ends Kilo's turn loop)
 #   >= REPEAT_HARD_STOP  -> synthetic final answer, upstream not called
+# 2026-09-02: 3/4 -> 5/6. Live session with thinking on: the model re-issued
+# one `cat ...` three times, the guard took its tools away at n=3 and the
+# forced text answer ENDED Kilo's turn nine rounds into a research task --
+# the guard was the thing quitting. The response-side duplicate retry below
+# (_apply_duplicate_retry) now catches an identical call before it is even
+# forwarded; tool removal is the last resort, not the second step.
 REPEAT_NUDGE_MIN = 2
-REPEAT_NO_TOOLS = 3
-REPEAT_HARD_STOP = 4
+REPEAT_NO_TOOLS = 5
+REPEAT_HARD_STOP = 6
 _REPEAT_NUDGE = (
     "\n\n[Harness] REPEATED ACTION: your last {n} assistant turns were "
     "identical. That tool result is already in the conversation above. Do NOT "
@@ -136,8 +184,10 @@ LOOP_PREFIX = (
     "Finish every requested step. Prefer tools over prose. After each tool "
     "result, immediately take the next action. Do not stop after 1 of N. "
     "Do not recap; act. Empty or error tool output: retry with a simpler "
-    "local command (ls/glob/grep/read). Verify with a tool before declaring "
-    "the job done. Tool calls must be real tool_calls, never prose like "
+    "local command (ls/glob/grep/read). Do not write a final answer while any "
+    "requested step is unfinished or unverified: after editing a file, run the "
+    "tests/build or read it back with a tool first. Never end with a question "
+    "or 'let me know if…'. Tool calls must be real tool_calls, never prose like "
     "'[Calling tool: ...]'. Never repeat an identical tool call; its result "
     "is already above. For 'what does X do' questions read only the file "
     "header (read with limit=150), not the whole file. Reply in English "
@@ -266,11 +316,17 @@ _FAKE_ACTION_RE = re.compile(
 )
 _EARLY_STOP_PLAN_RE = re.compile(
     r"(?is)"
-    r"(?:^|\n)\s*(?:#{1,3}\s*)?(?:next steps?|to-?dos?|plan)\b"
+    r"(?:^|\n)\s*(?:#{1,3}\s*)?(?:next steps?|to-?dos?|plan|remaining (?:work|steps|tasks|items)|pending|follow-?ups?)\b"
     r"|\bi(?:'| a)?m\s+(?:going\s+to|about\s+to)\s+"
-    r"|\bi(?:'| wi)?ll\s+(?:start|probe|check|fetch|run|search|use|look|verify|read|list)\b"
-    r"|\blet\s+me\s+(?:probe|check|fetch|run|search|verify|start|read|list)\b"
+    r"|\bi(?:'| wi)?ll\s+(?:start|probe|check|fetch|run|search|use|look|verify|read|list|now|then|next)\b"
+    r"|\blet\s+me\s+(?:probe|check|fetch|run|search|verify|start|read|list|know\s+if)\b"
     r"|\bnext[,:]?\s+i\s+will\b"
+    # Hand-back endings: the model knows work remains and asks permission.
+    r"|\b(?:would|do)\s+you\s+(?:like|want)\s+me\s+to\b"
+    r"|\bshall\s+i\s+(?:proceed|continue|go\s+ahead|run|start)\b"
+    r"|\bshould\s+i\s+(?:proceed|continue|go\s+ahead)\b"
+    r"|\b(?:still|yet)\s+(?:to\s+be\s+|to\s+)?(?:done|verified|checked|tested|implemented)\b"
+    r"|\bnot\s+yet\s+(?:verified|tested|checked|run|implemented|done)\b"
 )
 
 _EMPTY_TOOL_NUDGE = (
@@ -294,6 +350,32 @@ _PROSE_LOOP_NUDGE = (
     "without tool_calls. Stop monologuing. Next message MUST be tool_calls "
     "only — take the next unfinished step."
 )
+_CYCLE_NUDGE = (
+    "\n\n[Harness] LOOP DETECTED: you are cycling over the same read-only "
+    "commands ({what}) without making progress — their output is already in "
+    "the conversation above. Re-reading status/summary/journal files will not "
+    "advance the task. STOP re-observing. Take a DIFFERENT, forward action "
+    "that changes state or produces a NEW finding (run an analysis/build/test, "
+    "edit a file, or inspect something not yet seen). If — and only if — the "
+    "mission is genuinely complete, state the final conclusion with the "
+    "evidence. Do not issue any of the repeated commands again."
+)
+_CYCLE_BREAK_USER = (
+    "[Harness] BANNED COMMAND: you have run `{what}` {n} times this turn with "
+    "no new result. It is now BANNED — running it again will END the turn. "
+    "Its output is already above:\n---\n{head}\n---\n"
+    "Take a COMPLETELY DIFFERENT action that moves the mission forward — "
+    "analyse code, edit or create a file, run a build/test, or inspect "
+    "something not yet seen — or, only if the mission is truly complete, give "
+    "the final conclusion with its evidence."
+)
+_CYCLE_STOP_TEXT = (
+    "[Harness] Stopped: stuck in a read-only loop. `{what}` ran repeatedly "
+    "with no new information and the model did not break out when redirected. "
+    "The last tool result is above. To continue, reply with a concrete next "
+    "action or a narrower goal — e.g. name the specific file to analyse or the "
+    "finding to produce."
+)
 _AFTER_TOOL_NUDGE = (
     "\n\n[Harness] Tool result received. If any requested step is unfinished, "
     "emit the next tool_call now. Do not recap. Verify before stopping."
@@ -306,6 +388,23 @@ _EARLY_STOP_NUDGE = (
 _RETRY_USER = (
     "[Harness] EARLY STOP: emit tool_calls for the next unfinished step now. "
     "No Next steps list. No recap. Run the next command."
+)
+# Verification gate: a final text answer whose most recent action was a file
+# edit/write (nothing run or read back since) is not a finished job.
+_VERIFY_GATE_NUDGE = (
+    "\n\n[Harness] VERIFY GATE: you changed files and then answered without "
+    "verifying. Before any final answer, run the project's tests/build or "
+    "read back the changed file with a tool. Next message MUST be that "
+    "verification tool_call. Do not recap."
+)
+_VERIFY_RETRY_USER = (
+    "[Harness] VERIFY GATE: run the verification now (tests/build, or read the "
+    "file you changed). tool_calls only. The final answer comes after the "
+    "verification result."
+)
+_EDIT_TOOL_NAMES = frozenset(
+    {"edit", "write", "multiedit", "apply_patch", "apply_diff", "write_to_file",
+     "replace_in_file", "insert_content", "search_and_replace"}
 )
 # Kilo's grep tool parses `rg --json`; a matched line > 64KB (minified dist
 # bundle, package-lock.json, .map) aborts the whole search with this error.
@@ -362,9 +461,21 @@ _PLAN_SCRIPT_RE = re.compile(
     r"(?:ONEPHONE_I_CONFIRM=1\s+)?(?:\./)?tools/[\w.-]+\.sh"
 )
 # Cap runaway tool loops: JIT continue only for the first N tools after
-# the last real user message; force a Next-steps retry at most once.
-AFTER_TOOL_NUDGE_MAX = 3
-EARLY_STOP_FORCE_MAX = 1
+# the last real user message. A plan/next-steps dump (no tool_calls) is
+# retried once per turn while the tool round count is <= EARLY_STOP_FORCE_MAX;
+# it tracks AFTER_TOOL_NUDGE_MAX so every nudged round can also be forced.
+# Round 0 is the first reply after the user prompt (first-turn guard).
+# 2026-09-02: 3 -> 8. Live Titan M2 session: the model recapped and stopped
+# at round 3, exactly where the nudge was stripped; a human had to type
+# "continue". Kilo's own step budget (kilo.json steps=50) is the hard cap.
+# 2026-09-02 (2): 8 -> 40. With thinking on, a research task ran 9 rounds in
+# 90 s and the cap stripped the nudge exactly when the model was mid-task;
+# past the cap the stream is passthrough and NO response-side check runs,
+# so a recap or a duplicate call ends the turn unchallenged. The nudge is
+# what keeps the loop going; a real final answer (not a plan, not an
+# unverified edit) still passes at any round. Kilo steps=50 is the hard cap.
+AFTER_TOOL_NUDGE_MAX = _env_int("QWEN38_OBL_AFTER_TOOL_MAX", 40)
+EARLY_STOP_FORCE_MAX = AFTER_TOOL_NUDGE_MAX
 _UPSTREAM_GEN_LOCK = threading.RLock()
 # Mirrors the lock for /healthz ("engine_busy") without touching the lock.
 _UPSTREAM_GEN_LOCK_BUSY = threading.Event()
@@ -726,6 +837,128 @@ def _repeat_summary(sig: str) -> str:
     return "identical text: " + sig.split("#", 1)[-1][:80]
 
 
+# Non-consecutive cycle detector (2026-09-02, live trace 19:16-19:18). The
+# model looped read(SUMMARY) -> tail(JOURNAL) -> ls(recent) -> read(SUMMARY)
+# ... for 12 rounds, re-reading the same three status files and never doing
+# the research. The consecutive repeat guard saw repeat_count=1 the whole
+# time because no TWO ADJACENT turns are identical. This looks at the tool
+# signatures of the last CYCLE_WINDOW assistant turns and reports how heavily
+# they cycle: the max repeat of any one signature, how many distinct ones,
+# and a human summary of the repeated ones.
+CYCLE_WINDOW = _env_int("QWEN38_OBL_CYCLE_WINDOW", 8)
+# Fire when one signature recurs at least this many times in the window.
+CYCLE_REPEAT_MIN = _env_int("QWEN38_OBL_CYCLE_MIN", 3)
+
+
+def _tool_signature(msg: dict) -> str | None:
+    """Just the tool-call half of _assistant_signature (name+args), no text.
+
+    Read-only tools that only re-observe state are what cycle; a signature of
+    tools alone means 'ls a; cat b' and 'ls a; cat b' match even if the model
+    wrapped them in different prose each time.
+    """
+    full = _assistant_signature(msg)
+    if full is None:
+        return None
+    head = full.split("#", 1)[0]
+    return head or None
+
+
+def _assistant_cycle(
+    messages: list[dict] | None, window: int = CYCLE_WINDOW
+) -> tuple[int, int, str]:
+    """(max_recurrence, distinct_sigs, summary) over the last ``window``
+    assistant TOOL turns. max_recurrence == 1 means no cycle."""
+    sigs: list[str] = []
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        sig = _tool_signature(msg)
+        if sig is None:
+            continue
+        sigs.append(sig)
+        if len(sigs) >= window:
+            break
+    if not sigs:
+        return 1, 0, ""
+    counts = Counter(sigs)
+    top_sig, top_n = counts.most_common(1)[0]
+    repeated = [sig for sig, n in counts.items() if n >= 2]
+    summary = "; ".join(_repeat_summary(sig + "#") for sig in repeated[:3])
+    return top_n, len(counts), summary
+
+
+# When a single command has recurred this many times in the window the nudge
+# has demonstrably failed (live: cycle guard fired 4x, model kept re-running
+# the same `tail`). At this point the proxy stops asking and forces the break
+# response-side: ban the command, and if the model STILL emits it, end the
+# turn with a visible message rather than spin. Above CYCLE_REPEAT_MIN (nudge)
+# but reached only by a genuinely stuck run.
+CYCLE_BREAK_MIN = _env_int("QWEN38_OBL_CYCLE_BREAK", 6)
+
+
+def _cycled_signatures(
+    messages: list[dict] | None, min_count: int, window: int = CYCLE_WINDOW
+) -> set[str]:
+    """Tool signatures that recur >= ``min_count`` times in the last
+    ``window`` assistant tool turns (the ones to ban)."""
+    counts: Counter[str] = Counter()
+    n = 0
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        sig = _tool_signature(msg)
+        if sig is None:
+            continue
+        counts[sig] += 1
+        n += 1
+        if n >= window:
+            break
+    return {sig for sig, c in counts.items() if c >= min_count}
+
+
+# Novelty starvation: the missing exit for MULTI-command cycles (2026-09-02).
+# A period-N cycle tops out at CYCLE_WINDOW/N recurrences of any one signature,
+# so a 2- or 3-cycle can never reach CYCLE_BREAK_MIN and only ever gets nudged
+# -- forever. Live log: 26 of 37 cycle detections had max<6 and no exit at all;
+# termination fell through to Kilo's own steps=50 budget. What every cycle
+# shares, whatever its period, is that no NEW tool signature ever appears.
+# Count assistant tool turns since one last produced an unseen signature:
+# genuine progress resets it to 0, a cycle of ANY period drives it up without
+# bound. Thresholds sit inside AFTER_TOOL_NUDGE_MAX (40) and kilo steps (50)
+# so the proxy stops the loop before the client's budget does.
+CYCLE_STALE_NO_TOOLS = _env_int("QWEN38_OBL_CYCLE_STALE_NO_TOOLS", 10)
+CYCLE_STALE_STOP = _env_int("QWEN38_OBL_CYCLE_STALE_STOP", 12)
+
+
+def _turns_since_new_signature(messages: list[dict] | None, cap: int = 64) -> int:
+    """Assistant tool turns since one last produced an unseen tool signature.
+
+    Truncating the scan at ``cap`` can only UNDER-count staleness (older
+    signatures are forgotten and read as new), so it never causes a false stop.
+    """
+    sigs: list[str] = []
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        sig = _tool_signature(msg)
+        if sig is None:
+            continue
+        sigs.append(sig)
+        if len(sigs) >= cap:
+            break
+    sigs.reverse()  # oldest -> newest
+    seen: set[str] = set()
+    stale = 0
+    for sig in sigs:
+        if sig in seen:
+            stale += 1
+        else:
+            seen.add(sig)
+            stale = 0
+    return stale
+
+
 def _message_chars(msg: dict) -> int:
     n = len(_message_text(msg))
     tcs = msg.get("tool_calls")
@@ -828,9 +1061,17 @@ def _strip_nudge(messages: list[dict], nudge: str) -> None:
         _set_message_text(msg, cleaned)
 
 
+_HARNESS_USER_MARKERS = (
+    "[Harness] EARLY STOP:",
+    "[Harness] VERIFY GATE:",
+    "[Harness] REPEATED ACTION:",
+    "[Harness] BANNED COMMAND:",
+)
+
+
 def _is_harness_user(msg: dict) -> bool:
     text = _message_text(msg)
-    return "[Harness] EARLY STOP:" in text
+    return any(m in text for m in _HARNESS_USER_MARKERS)
 
 
 def _tool_rounds_since_user(messages: list[dict] | None) -> int:
@@ -863,6 +1104,7 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
         "prose_loop": False,
         "prose_loop_recovery": False,
         "after_tool_continue": False,
+        "first_turn_guard": False,
         "truncated_tool_msgs": 0,
         "missing_path_recovery": False,
         "repeat_count": 0,
@@ -870,6 +1112,13 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
         "repeat_no_tools": False,
         "repeat_stop": False,
         "repeat_what": "",
+        "cycle_max": 1,
+        "cycle_distinct": 0,
+        "cycle_recovery": False,
+        "cycle_what": "",
+        "cycle_stale": 0,
+        "cycle_stale_no_tools": False,
+        "cycle_stale_stop": False,
         "trimmed_msgs": 0,
         "grep_overflow_recovery": False,
     }
@@ -929,6 +1178,13 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
         else:
             _strip_nudge(messages, _AFTER_TOOL_NUDGE)
             log.info("[agent] after-tool cap rounds=%s max=%s", rounds, after_max)
+    elif last_role == "user" and cfg.get("mw_first_turn", True):
+        # First reply after the user prompt. Kilo ends the turn if it comes
+        # back as prose, so a plan/next-steps dump here strands the task
+        # until a human types "continue". Arm the early-stop middleware so
+        # that reply is buffered, checked, and retried once with tool_calls.
+        trace["first_turn_guard"] = True
+        log.info("[agent] first-turn guard armed")
     if fake and cfg.get("mw_fake_action", True) and _nudge_system(
         messages,
         "[Harness] FAKE ACTION:",
@@ -963,11 +1219,45 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
             trace["repeat_recovery"] = True
             trace["repeat_no_tools"] = rep >= no_tools_min
             trace["repeat_stop"] = rep >= stop_min
+    if cfg.get("mw_cycle_guard", True):
+        cyc_max, cyc_distinct, cyc_what = _assistant_cycle(messages)
+        trace["cycle_max"] = cyc_max
+        trace["cycle_distinct"] = cyc_distinct
+        cyc_min = int(cfg.get("cycle_repeat_min") or CYCLE_REPEAT_MIN)
+        # Fire only when the CONSECUTIVE repeat guard did not already handle
+        # it (that one removes tools; this one keeps them and redirects).
+        if cyc_max >= cyc_min and not trace.get("repeat_recovery"):
+            trace["cycle_what"] = cyc_what
+            _strip_nudge_prefix(messages, "[Harness] LOOP DETECTED:")
+            _nudge_system(
+                messages,
+                "[Harness] LOOP DETECTED:",
+                _CYCLE_NUDGE.format(what=cyc_what or "the same few commands"),
+                f"cycle recovery (max={cyc_max} distinct={cyc_distinct} what={cyc_what!r})",
+            )
+            trace["cycle_recovery"] = True
+        # Period-independent exit. Runs even when the consecutive repeat guard
+        # owns this turn: that one has its own ladder and fires first, and a
+        # stale count only rises while nothing new is being tried.
+        stale = _turns_since_new_signature(messages)
+        trace["cycle_stale"] = stale
+        no_tools_at = int(cfg.get("cycle_stale_no_tools") or CYCLE_STALE_NO_TOOLS)
+        stop_at = int(cfg.get("cycle_stale_stop") or CYCLE_STALE_STOP)
+        if stale >= no_tools_at:
+            trace["cycle_stale_no_tools"] = True
+            trace["cycle_stale_stop"] = stale >= stop_at
+            if not trace.get("cycle_what"):
+                trace["cycle_what"] = _assistant_cycle(messages)[2]
+            log.info(
+                "[agent] cycle stale: %s turns with no new action (no_tools=%s stop=%s)",
+                stale, no_tools_at, trace["cycle_stale_stop"],
+            )
     if (
         trace.get("empty_tool_recovery")
         or trace.get("fake_action_recovery")
         or trace.get("prose_loop_recovery")
         or trace.get("repeat_recovery")
+        or trace.get("cycle_recovery")
     ):
         append_live_event(
             {
@@ -977,6 +1267,8 @@ def apply_loop_middleware(messages: list[dict]) -> dict[str, Any]:
                 "repeat_recovery": trace.get("repeat_recovery"),
                 "repeat_count": trace.get("repeat_count"),
                 "repeat_stop": trace.get("repeat_stop"),
+                "cycle_recovery": trace.get("cycle_recovery"),
+                "cycle_max": trace.get("cycle_max"),
                 "after_tool_continue": trace.get("after_tool_continue"),
                 "fake_action": fake,
                 "prose_loop": prose,
@@ -1000,12 +1292,31 @@ def _strip_nudge_prefix(messages: list[dict], marker: str) -> None:
         _set_message_text(msg, cleaned)
 
 
-def _apply_card_sampling(body: dict) -> None:
+def _apply_card_sampling(body: dict, *, thinking: bool = False) -> None:
     body["temperature"] = CARD_TEMPERATURE
     body["top_p"] = CARD_TOP_P
     body["frequency_penalty"] = CARD_FREQUENCY_PENALTY
-    body["enable_thinking"] = False
     body.pop("top_k", None)
+    _set_thinking(body, thinking)
+
+
+def _set_thinking(body: dict, on: bool) -> None:
+    """Thinking on/off for this request, explicitly, on every field mtplx reads.
+
+    Top-level ``enable_thinking`` wins in mtplx; ``chat_template_kwargs`` is
+    kept in agreement so the two can never disagree. ``reasoning_effort`` is
+    only meaningful with thinking on (the template raises on anything but
+    low/medium/xhigh, so the value is validated at import).
+    """
+    on = bool(on and THINKING)
+    body["enable_thinking"] = on
+    ctk = body.get("chat_template_kwargs")
+    if isinstance(ctk, dict):
+        ctk["enable_thinking"] = on
+    if on:
+        body["reasoning_effort"] = REASONING_EFFORT
+    else:
+        body.pop("reasoning_effort", None)
 
 
 def _ensure_max_tokens(body: dict, *, floor: int, cap: int | None = None) -> None:
@@ -1166,7 +1477,7 @@ def prepare_body(body: dict, trace: dict | None = None) -> dict:
         tr["compaction"] = True
         return body
 
-    _apply_card_sampling(body)
+    _apply_card_sampling(body, thinking=bool(body.get("tools")))
     if body.get("tools"):
         _ensure_max_tokens(
             body, floor=AGENT_MAX_TOKENS_FLOOR, cap=AGENT_MAX_TOKENS_CAP
@@ -1178,15 +1489,34 @@ def prepare_body(body: dict, trace: dict | None = None) -> dict:
         if isinstance(msgs, list):
             tr.update(apply_loop_middleware(msgs))
             _repair_history_tool_calls(msgs)
-            if tr.get("repeat_no_tools"):
+            # Self-healing: when a loop is detected, give THIS turn maximum
+            # deliberation so the model can reason its way out instead of
+            # re-emitting the same greedy action (live: 49 reasoning chars on
+            # looping turns at medium). Capability before steering.
+            if (
+                tr.get("cycle_recovery")
+                and THINKING
+                and body.get("enable_thinking")
+                and body.get("reasoning_effort") != "xhigh"
+            ):
+                body["reasoning_effort"] = "xhigh"
+                tr["cycle_escalate_effort"] = True
+                log.info("[agent] cycle: reasoning_effort -> xhigh for this turn")
+            if tr.get("repeat_no_tools") or tr.get("cycle_stale_no_tools"):
                 # The model keeps re-issuing one tool call. Take the tools
                 # away for this turn so it has to answer in text, which ends
                 # Kilo's tool loop instead of burning another engine slot.
                 body.pop("tools", None)
                 body.pop("functions", None)
                 body["tool_choice"] = "none"
+                # No tools -> no engine thinking budget; a <think> block would
+                # eat the whole (now small) max_tokens and return no answer.
+                _set_thinking(body, False)
                 _cap_max_tokens(body, cap=CHAT_MAX_TOKENS_CAP)
-                log.info("[agent] repeat guard: tools removed (n=%s)", tr.get("repeat_count"))
+                log.info(
+                    "[agent] tools removed (repeat n=%s cycle_stale=%s)",
+                    tr.get("repeat_count"), tr.get("cycle_stale"),
+                )
     else:
         # Plain chat / title generation: still bound a runaway greedy loop,
         # but leave an absent max_tokens to the engine default.
@@ -1667,19 +1997,70 @@ def _history_paths_by_basename(messages: list[dict] | None) -> dict[str, str]:
     return found
 
 
+_LEADING_CD_RE = re.compile(r"^\s*cd\s+['\"]?([^'\"\s;&|]+)['\"]?\s*(?:&&|;)")
+
+
+def _leading_cd_dir(command: str) -> str | None:
+    m = _LEADING_CD_RE.match(command or "")
+    return m.group(1) if m else None
+
+
+def _bash_path_exists(
+    path: str, cd_dir: str | None, messages: list[dict] | None
+) -> bool | None:
+    """Does ``path`` exist as the shell would resolve it? None = unknown."""
+    raw = (path or "").strip().strip("'\"")
+    if not raw:
+        return None
+    if raw.startswith("~/"):
+        raw = str(Path.home() / raw[2:])
+    try:
+        if Path(raw).is_absolute():
+            return Path(raw).exists()
+        if cd_dir:
+            base = Path(cd_dir)
+            if not base.is_absolute():
+                ws = _extract_workspace_dir(messages)
+                if not ws:
+                    return None
+                base = Path(ws) / base
+            return (base / raw).exists()
+    except OSError:
+        return None
+    return _workspace_entry_exists(raw, messages)
+
+
 def _rewrite_missing_path_command(command: str, messages: list[dict] | None) -> str | None:
+    """Point cat/head at the path history actually showed — for MISSING paths.
+
+    A path that exists (as the shell resolves it, honouring a leading
+    ``cd <dir> &&``) is real work and is left alone. 2026-09-02 Titan M2
+    session: a correct ``cd repo && cat analysis/.../autohunt/STATE.json``
+    was rewritten to the bare ``STATE.json`` an earlier ls had listed; that
+    did not exist from the repo root, the model re-asked, the rewrite hit
+    again, and the repeat guard ended the task after three identical turns.
+    A directory-qualified path is also never downgraded to a bare basename.
+    """
     known = _history_paths_by_basename(messages)
     if not known or not command:
         return None
+    cd_dir = _leading_cd_dir(command)
     rewritten = command
     changed = False
     for match in _CAT_PATH_RE.finditer(command):
         raw = match.group(1)
+        if _bash_path_exists(raw, cd_dir, messages) is True:
+            continue
         name = _path_basename(raw)
         alt = known.get(name)
-        if alt and alt != raw:
-            rewritten = rewritten.replace(raw, alt)
-            changed = True
+        if not alt or alt == raw:
+            continue
+        if "/" in raw.strip("./") and "/" not in alt:
+            continue
+        if _bash_path_exists(alt, cd_dir, messages) is False:
+            continue
+        rewritten = rewritten.replace(raw, alt)
+        changed = True
     return rewritten if changed else None
 
 
@@ -1790,6 +2171,38 @@ def _is_early_stop_plan(text: str, has_tools: bool) -> bool:
     return bool(_EARLY_STOP_PLAN_RE.search(blob))
 
 
+def _last_tool_names_since_user(messages: list[dict] | None) -> list[str]:
+    """Tool names of the most recent assistant tool_calls turn since the last
+    real user message; [] when the last action was not a tool call."""
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role == "user" and not _is_harness_user(msg):
+            return []
+        if role != "assistant":
+            continue
+        tcs = msg.get("tool_calls")
+        if not isinstance(tcs, list) or not tcs:
+            return []
+        names: list[str] = []
+        for tc in tcs:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            name = (fn or {}).get("name") if isinstance(fn, dict) else None
+            if name:
+                names.append(str(name))
+        return names
+    return []
+
+
+def _unverified_edit(messages: list[dict] | None) -> bool:
+    """True when the most recent action in this user turn was a file edit or
+    write — nothing has been run or read back since, so a final answer now
+    is unverified."""
+    names = _last_tool_names_since_user(messages)
+    return bool(names) and all(n in _EDIT_TOOL_NAMES for n in names)
+
+
 def _sse_text_and_tools(raw: bytes) -> tuple[str, bool]:
     parts: list[str] = []
     saw_tool = False
@@ -1833,6 +2246,170 @@ def _json_text_and_tools(payload: bytes) -> tuple[str, bool]:
     return "".join(parts), saw_tool
 
 
+def _payload_tool_calls(raw: bytes, *, sse: bool) -> list[dict]:
+    """Assembled tool calls [{name, arguments}] from an SSE or JSON payload."""
+    out: list[dict] = []
+    if sse:
+        assembled: dict[int, dict] = {}
+        for event in _iter_sse_json(raw):
+            if not isinstance(event, dict):
+                continue
+            for choice in event.get("choices") or []:
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta") or {}
+                if not isinstance(delta, dict):
+                    continue
+                for tc in delta.get("tool_calls") or []:
+                    if not isinstance(tc, dict):
+                        continue
+                    idx = int(tc.get("index") or 0)
+                    slot = assembled.setdefault(idx, {"name": "", "arguments": ""})
+                    fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                    if fn.get("name"):
+                        slot["name"] = str(fn["name"])
+                    if fn.get("arguments"):
+                        slot["arguments"] += str(fn["arguments"])
+        return [assembled[i] for i in sorted(assembled)]
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return out
+    if not isinstance(data, dict):
+        return out
+    for choice in data.get("choices") or []:
+        msg = choice.get("message") if isinstance(choice, dict) else None
+        for tc in (msg or {}).get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+            out.append(
+                {"name": str(fn.get("name") or ""), "arguments": str(fn.get("arguments") or "")}
+            )
+    return out
+
+
+def _tool_calls_sig(tcs: list[dict]) -> str:
+    """Same normalisation as the tools half of _assistant_signature."""
+    sig: list[str] = []
+    for tc in tcs:
+        args: Any = tc.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (ValueError, TypeError):
+                pass
+        if isinstance(args, dict):
+            args = json.dumps(args, sort_keys=True, ensure_ascii=False)
+        sig.append(f"{tc.get('name', '')}({args})")
+    return "|".join(sorted(sig))
+
+
+def _last_assistant_tool_sig(messages: list[dict] | None) -> str:
+    for msg in reversed(messages or []):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            full = _assistant_signature(msg) or ""
+            return full.split("#", 1)[0]
+    return ""
+
+
+def _last_tool_result_head(messages: list[dict] | None, n: int = 400) -> str:
+    for msg in reversed(messages or []):
+        if isinstance(msg, dict) and msg.get("role") in ("tool", "function"):
+            return _message_text(msg)[:n]
+    return ""
+
+
+def _payload_reasoning_chars(raw: bytes, *, sse: bool) -> int:
+    n = 0
+    if sse:
+        for event in _iter_sse_json(raw):
+            if not isinstance(event, dict):
+                continue
+            for choice in event.get("choices") or []:
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta") or choice.get("message") or {}
+                if not isinstance(delta, dict):
+                    continue
+                for key in ("reasoning_content", "reasoning"):
+                    v = delta.get(key)
+                    if isinstance(v, str):
+                        n += len(v)
+        return n
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return 0
+    for choice in (data.get("choices") or []) if isinstance(data, dict) else []:
+        msg = choice.get("message") if isinstance(choice, dict) else None
+        for key in ("reasoning_content", "reasoning"):
+            v = (msg or {}).get(key)
+            if isinstance(v, str):
+                n += len(v)
+    return n
+
+
+def _payload_finish_reason(raw: bytes, *, sse: bool) -> str:
+    reason = ""
+    if sse:
+        for event in _iter_sse_json(raw):
+            if not isinstance(event, dict):
+                continue
+            for choice in event.get("choices") or []:
+                if isinstance(choice, dict) and choice.get("finish_reason"):
+                    reason = str(choice["finish_reason"])
+        return reason
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    for choice in (data.get("choices") or []) if isinstance(data, dict) else []:
+        if isinstance(choice, dict) and choice.get("finish_reason"):
+            reason = str(choice["finish_reason"])
+    return reason
+
+
+# Live rollout trace (AutoSaddler: diagnose traces, not symptoms). One JSON
+# line per model response on agent turns: what the model was shown last
+# (tool result head), what it produced (reasoning size, content head, tool
+# calls), and which middleware fired. Read with:
+#   tail -n 20 logs/live-trace.jsonl | python3 -m json.tool
+LIVE_TRACE_FILE = Path(__file__).resolve().parent / "logs" / "live-trace.jsonl"
+_LIVE_TRACE_LOCK = threading.Lock()
+
+
+def _write_live_trace(record: dict) -> None:
+    try:
+        LIVE_TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(record, ensure_ascii=False)
+        with _LIVE_TRACE_LOCK, LIVE_TRACE_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError as exc:
+        log.warning("[trace] live trace write failed: %s", exc)
+
+
+_DUPLICATE_RETRY_USER = (
+    "[Harness] REPEATED ACTION: you just issued the SAME tool call as your "
+    "previous turn ({what}). It already ran; its result is in the "
+    "conversation above and begins:\n---\n{head}\n---\n"
+    "Do not run it again. Use that result: take the next DIFFERENT step "
+    "toward the goal now (tool_calls), or if the goal is met give the "
+    "final conclusion."
+)
+
+
+def _apply_duplicate_retry(body: dict, what: str, head: str) -> None:
+    """Response-side duplicate: ask once for a different step, with the
+    result the model apparently did not read quoted back at it."""
+    body["tool_choice"] = "auto"
+    msgs = body.get("messages")
+    if not isinstance(msgs, list):
+        return
+    text = _DUPLICATE_RETRY_USER.format(what=what[:160], head=head.strip()[:400] or "(empty)")
+    msgs.append({"role": "user", "content": text})
+
+
 def _should_force_continue(
     text: str, has_tools: bool, messages: list[dict] | None
 ) -> bool:
@@ -1845,6 +2422,8 @@ def _should_force_continue(
     if rounds > max_force:
         return False
     if _is_early_stop_plan(text, False):
+        return True
+    if _active_harness().get("mw_verify_gate", True) and _unverified_edit(messages):
         return True
     return not (text or "").strip()
 
@@ -1864,8 +2443,10 @@ def _command_from_plan(text: str) -> str | None:
 
 
 def _make_tool_call(name: str, args: dict) -> dict:
+    # Unique per call: two synthetic calls in one session must not share a
+    # tool_call_id, or the client can pair a result with the wrong call.
     return {
-        "id": f"call_saddle_{name}",
+        "id": f"call_saddle_{name}_{int(time.time() * 1000) % 100_000_000:x}",
         "type": "function",
         "index": 0,
         "function": {
@@ -1903,6 +2484,128 @@ def _recent_bash_commands(messages: list[dict] | None) -> set[str]:
             if parsed and parsed.get("command"):
                 found.add(str(parsed["command"]).strip())
     return found
+
+
+# Prose tool calls (2026-09-02, live trace): the model answered a research
+# turn with `<bash>\n\nls -la …; ls … | head -60\n\n` as plain CONTENT —
+# an XML-shaped tool call that never became tool_calls (mtplx's parser only
+# knows the Qwen <tool_call>{json}</tool_call> form). The early-stop regex
+# did not match, so the text passed as a final answer and Kilo ended the turn.
+# Capability patch: recognise the shapes the model actually emits and turn
+# them into real tool_calls before the client sees them. No retry, no
+# extra engine round.
+_TOOL_TAG_RE = re.compile(r"(?s)<([A-Za-z_][\w-]*)>\s*(.*?)\s*(?:</\1>|$)")
+_TOOL_CALL_JSON_RE = re.compile(r"(?s)<tool_call>\s*(\{.*?\})\s*(?:</tool_call>|$)")
+_FENCE_ONLY_RE = re.compile(r"(?s)^\s*```(?:bash|sh|shell|zsh)?\s*\n(.*?)\n?```\s*$")
+# The bracketed prose form the LOOP_PREFIX warns against and the model still
+# emits: "[Tool calls: bash({json})]" / "[Calling tool: read({json})]".
+# 2026-09-02 live trace round 12 ended a turn this way (finish=stop).
+_BRACKET_TOOL_RE = re.compile(
+    r"(?is)\[\s*(?:tool\s*calls?|calling\s*tool)\s*[:\-]?\s*"
+    r"([A-Za-z_][\w-]*)\s*\(\s*(\{.*?\})\s*\)\s*\]"
+)
+_INNER_KV_RE = re.compile(r"(?s)<([A-Za-z_][\w-]*)>\s*(.*?)\s*</\1>")
+
+
+def _request_tool_schemas(body: dict | None) -> dict[str, dict]:
+    """name -> parameters schema for the tools declared on the request."""
+    out: dict[str, dict] = {}
+    for tool in (body or {}).get("tools") or []:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+        name = str(fn.get("name") or "")
+        if name:
+            params = fn.get("parameters") if isinstance(fn.get("parameters"), dict) else {}
+            out[name] = params or {}
+    return out
+
+
+def _primary_arg_name(schema: dict, fallback: str) -> str:
+    req = schema.get("required")
+    if isinstance(req, list) and req and isinstance(req[0], str):
+        return req[0]
+    props = schema.get("properties")
+    if isinstance(props, dict) and props:
+        return next(iter(props))
+    return fallback
+
+
+def _pseudo_tool_calls(text: str, body: dict | None) -> list[dict]:
+    """Tool calls the model wrote as prose, as real tool_calls (or [])."""
+    blob = (text or "").strip()
+    if not blob or len(blob) > 6000:
+        return []
+    schemas = _request_tool_schemas(body)
+    if not schemas:
+        return []
+    # 1. Qwen JSON form that the engine parser missed (e.g. unclosed tag).
+    m = _TOOL_CALL_JSON_RE.search(blob)
+    if m:
+        try:
+            obj = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict) and str(obj.get("name") or "") in schemas:
+            args = obj.get("arguments") if isinstance(obj.get("arguments"), dict) else {}
+            return [_make_tool_call(str(obj["name"]), args)]
+    # 2. <toolname> … </toolname> (Kilo/Cline XML style), possibly unclosed.
+    m = _TOOL_TAG_RE.search(blob)
+    if m and m.group(1) in schemas:
+        name = m.group(1)
+        inner = m.group(2).strip()
+        schema = schemas[name]
+        kv = {k: v.strip() for k, v in _INNER_KV_RE.findall(inner)}
+        props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        if kv and any(k in props for k in kv):
+            args: dict[str, Any] = {}
+            for k, v in kv.items():
+                if k not in props:
+                    continue
+                typ = (props.get(k) or {}).get("type") if isinstance(props.get(k), dict) else None
+                if typ == "integer":
+                    try:
+                        args[k] = int(v)
+                        continue
+                    except ValueError:
+                        pass
+                if typ == "boolean":
+                    args[k] = v.lower() in ("1", "true", "yes")
+                    continue
+                args[k] = v
+            if args:
+                return [_make_tool_call(name, args)]
+        if inner.startswith("{"):
+            try:
+                obj = json.loads(inner)
+            except json.JSONDecodeError:
+                obj = None
+            if isinstance(obj, dict):
+                return [_make_tool_call(name, obj)]
+        # Bare inner text -> primary arg. Only when the tag actually looks
+        # like an invocation: properly closed, or opening the reply (the
+        # unclosed live shape "<bash>\n\nls -la ...", 2026-09-02). A tag named
+        # mid-sentence is prose -- "I'll use the <bash> tool to list files"
+        # would otherwise become bash({command: "tool to list files"}).
+        closed = m.group(0).rstrip().endswith(f"</{name}>")
+        if inner and not kv and (closed or m.start() == 0):
+            key = _primary_arg_name(schema, "command" if name == "bash" else "input")
+            return [_make_tool_call(name, {key: inner})]
+    # 3. "[Tool calls: name({json})]" / "[Calling tool: name({json})]".
+    m = _BRACKET_TOOL_RE.search(blob)
+    if m and m.group(1) in schemas:
+        try:
+            obj = json.loads(m.group(2))
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict):
+            return [_make_tool_call(m.group(1), obj)]
+    # 4. A reply that is nothing but a shell code fence.
+    if "bash" in schemas:
+        m = _FENCE_ONLY_RE.match(blob)
+        if m and m.group(1).strip():
+            return [_make_tool_call("bash", {"command": m.group(1).strip()})]
+    return []
 
 
 def _synthetic_tool_calls(
@@ -2070,25 +2773,34 @@ def _json_tool_payload(tcs: list[dict], model: str, response_id: str) -> bytes:
 
 
 def _apply_early_stop_retry(body: dict) -> None:
-    """mtplx accepts tool_choice auto|none only — nudge via a user turn."""
+    """mtplx accepts tool_choice auto|none only — nudge via a user turn.
+
+    Picks the VERIFY GATE wording when the stop followed an unverified
+    edit/write, otherwise the generic EARLY STOP wording. One retry per turn
+    either way: the system marker and the user nudge are both idempotent.
+    """
     body["tool_choice"] = "auto"
     msgs = body.get("messages")
     if not isinstance(msgs, list):
         return
+    verify = _unverified_edit(msgs)
+    marker = "[Harness] VERIFY GATE:" if verify else "[Harness] EARLY STOP:"
+    nudge = _VERIFY_GATE_NUDGE if verify else _EARLY_STOP_NUDGE
+    user_text = _VERIFY_RETRY_USER if verify else _RETRY_USER
     _nudge_system(
         msgs,
-        "[Harness] EARLY STOP:",
-        _EARLY_STOP_NUDGE,
-        "early-stop plan retry",
+        marker,
+        nudge,
+        "verify-gate retry" if verify else "early-stop plan retry",
     )
     if any(
         isinstance(m, dict)
         and m.get("role") == "user"
-        and "[Harness] EARLY STOP:" in _message_text(m)
+        and ("[Harness] EARLY STOP:" in _message_text(m) or "[Harness] VERIFY GATE:" in _message_text(m))
         for m in msgs
     ):
         return
-    msgs.append({"role": "user", "content": _RETRY_USER})
+    msgs.append({"role": "user", "content": user_text})
 
 
 def _path_from_args(args: dict) -> str:
@@ -2393,11 +3105,22 @@ def _connect(state: ProxyState) -> HTTPConnection:
     return HTTPConnection(state.host, state.port, timeout=UPSTREAM_TIMEOUT)
 
 
-def _needs_buffered_sse(steer_trace: dict[str, Any]) -> bool:
+def _early_stop_armed(steer_trace: dict[str, Any]) -> bool:
+    """Early-stop middleware applies to nudged tool rounds and the first turn.
+
+    Not when the repeat guard already took the tools away: there is nothing
+    to force a tool_call with, the model is meant to answer in text.
+    """
     return bool(
-        steer_trace.get("after_tool_continue")
+        (steer_trace.get("after_tool_continue") or steer_trace.get("first_turn_guard"))
+        and not steer_trace.get("repeat_no_tools")
+        and not steer_trace.get("cycle_stale_no_tools")
         and _active_harness().get("mw_early_stop", True)
     )
+
+
+def _needs_buffered_sse(steer_trace: dict[str, Any]) -> bool:
+    return _early_stop_armed(steer_trace)
 
 
 class _ClientGone(Exception):
@@ -2587,7 +3310,10 @@ class Handler(BaseHTTPRequestHandler):
                         "temperature": CARD_TEMPERATURE,
                         "top_p": CARD_TOP_P,
                         "frequency_penalty": CARD_FREQUENCY_PENALTY,
-                        "enable_thinking": False,
+                        "enable_thinking": THINKING,
+                        "thinking_scope": "tool turns only" if THINKING else "off",
+                        "reasoning_effort": REASONING_EFFORT if THINKING else None,
+                        "thinking_budget": THINKING_BUDGET if THINKING else 0,
                     },
                     "english_only": ENGLISH_GUARD,
                     "limits": {
@@ -2902,6 +3628,165 @@ class Handler(BaseHTTPRequestHandler):
         stream: bool,
         on_tick,
     ) -> tuple[int, dict[str, str], str, bytes]:
+        """Early-stop / verify-gate retry, then duplicate-call retry, then trace."""
+        t0 = time.monotonic()
+        status, resp_headers, content_type, payload = self._post_process_inner(
+            path=path,
+            headers=headers,
+            body=body,
+            parsed=parsed,
+            steer_messages=steer_messages,
+            steer_trace=steer_trace,
+            stream=stream,
+            on_tick=on_tick,
+        )
+        if status != 200 or parsed is None or not isinstance(parsed, dict):
+            return status, resp_headers, content_type, payload
+        is_sse = stream or "text/event-stream" in content_type
+        if not (is_sse or "application/json" in content_type):
+            return status, resp_headers, content_type, payload
+        tcs = _payload_tool_calls(payload, sse=is_sse)
+        # Duplicate tool call: identical to the previous assistant turn. Kilo
+        # would run it again for nothing and the request-side repeat guard
+        # would count one more toward taking the tools away. Ask once for a
+        # different step, quoting the result the model evidently skipped.
+        if (
+            tcs
+            and parsed.get("tools")
+            and _active_harness().get("mw_duplicate_retry", True)
+            and not steer_trace.get("dup_retried")
+            and not steer_trace.get("repeat_no_tools")
+            and not steer_trace.get("cycle_stale_no_tools")
+        ):
+            sig = _tool_calls_sig(tcs)
+            if sig and sig == _last_assistant_tool_sig(steer_messages):
+                steer_trace["dup_retried"] = True
+                what = _repeat_summary(sig)
+                log.info("[agent] duplicate tool call: retrying once (%s)", what)
+                _apply_duplicate_retry(
+                    parsed, what, _last_tool_result_head(steer_messages)
+                )
+                body2 = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+                headers["Content-Length"] = str(len(body2))
+                st2, rh2, ct2, pl2 = self._fetch_buffered(path, body2, headers, on_tick)
+                if st2 == 200:
+                    is_sse2 = stream or "text/event-stream" in ct2
+                    if is_sse2:
+                        pl2 = _repair_sse_payload(pl2, steer_messages)
+                    elif "application/json" in ct2:
+                        pl2 = _repair_response_payload(pl2, steer_messages)
+                    tcs2 = _payload_tool_calls(pl2, sse=is_sse2)
+                    if tcs2 and _tool_calls_sig(tcs2) == sig:
+                        log.info("[agent] duplicate tool call: still identical, forwarding")
+                    status, resp_headers, content_type, payload = st2, rh2, ct2, pl2
+                    is_sse = is_sse2
+                    tcs = tcs2
+        # Cycle break: the model keeps re-issuing a command that already
+        # recurred CYCLE_BREAK_MIN times (the nudge + xhigh escalation did not
+        # work). Ban it: one hard retry, and if it STILL comes back, end the
+        # turn with a visible message instead of letting Kilo spin forever.
+        if (
+            tcs
+            and parsed.get("tools")
+            and _active_harness().get("mw_cycle_break", True)
+            and not steer_trace.get("cycle_broke")
+        ):
+            banned = _cycled_signatures(steer_messages, CYCLE_BREAK_MIN)
+            sig = _tool_calls_sig(tcs)
+            if sig and sig in banned:
+                steer_trace["cycle_broke"] = True
+                what = _repeat_summary(sig)
+                head = _last_tool_result_head(steer_messages)
+                log.info("[agent] cycle break: banning %s", what)
+                _strip_nudge_prefix(parsed.get("messages") or [], "[Harness] BANNED COMMAND:")
+                msgs2 = parsed.get("messages")
+                if isinstance(msgs2, list):
+                    msgs2.append({
+                        "role": "user",
+                        "content": _CYCLE_BREAK_USER.format(
+                            what=what[:160], n=CYCLE_BREAK_MIN, head=(head.strip()[:400] or "(empty)")
+                        ),
+                    })
+                parsed["tool_choice"] = "auto"
+                body3 = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+                headers["Content-Length"] = str(len(body3))
+                st3, rh3, ct3, pl3 = self._fetch_buffered(path, body3, headers, on_tick)
+                if st3 == 200:
+                    is_sse3 = stream or "text/event-stream" in ct3
+                    if is_sse3:
+                        pl3 = _repair_sse_payload(pl3, steer_messages)
+                    elif "application/json" in ct3:
+                        pl3 = _repair_response_payload(pl3, steer_messages)
+                    tcs3 = _payload_tool_calls(pl3, sse=is_sse3)
+                    if tcs3 and _tool_calls_sig(tcs3) in banned:
+                        # Still the banned command -> visible stop.
+                        steer_trace["cycle_stop"] = True
+                        model, rid = _payload_ids(pl3, sse=is_sse3)
+                        stop_text = _CYCLE_STOP_TEXT.format(what=what[:160])
+                        log.info("[agent] cycle break: model repeated banned cmd -> stopping turn")
+                        payload = (
+                            _sse_text_payload(stop_text, model, rid)
+                            if is_sse3
+                            else _json_text_payload(stop_text, model, rid)
+                        )
+                        return status, resp_headers, content_type, payload
+                    log.info("[agent] cycle break: model took a different action")
+                    status, resp_headers, content_type, payload = st3, rh3, ct3, pl3
+                    is_sse = is_sse3
+                    tcs = tcs3
+        text, _has = (
+            _sse_text_and_tools(payload) if is_sse else _json_text_and_tools(payload)
+        )
+        reasoning_chars = _payload_reasoning_chars(payload, sse=is_sse)
+        finish = _payload_finish_reason(payload, sse=is_sse)
+        log.info(
+            "[out] %.1fs reasoning=%dch content=%dch tools=%s finish=%s%s",
+            time.monotonic() - t0,
+            reasoning_chars,
+            len(text),
+            [f"{tc['name']}({tc['arguments'][:80]})" for tc in tcs] or "-",
+            finish or "?",
+            (" dup_retry" if steer_trace.get("dup_retried") else "")
+            + (" cycle_break" if steer_trace.get("cycle_broke") else "")
+            + (" cycle_stop" if steer_trace.get("cycle_stop") else "")
+            + (" xhigh" if steer_trace.get("cycle_escalate_effort") else ""),
+        )
+        _write_live_trace(
+            {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "elapsed_s": round(time.monotonic() - t0, 1),
+                "nmsg": len(steer_messages or []),
+                "rounds_since_user": _tool_rounds_since_user(steer_messages),
+                "last_tool_head": _last_tool_result_head(steer_messages, 600),
+                "reasoning_chars": reasoning_chars,
+                "content_head": text[:800],
+                "tool_calls": [
+                    {"name": tc["name"], "arguments": tc["arguments"][:400]} for tc in tcs
+                ],
+                "finish_reason": finish,
+                "cycle_max": steer_trace.get("cycle_max"),
+                "flags": {
+                    k: v
+                    for k, v in steer_trace.items()
+                    if v and k not in ("repeat_what",)
+                },
+                "repeat_what": steer_trace.get("repeat_what") or "",
+            }
+        )
+        return status, resp_headers, content_type, payload
+
+    def _post_process_inner(
+        self,
+        *,
+        path: str,
+        headers: dict[str, str],
+        body: bytes,
+        parsed: dict | None,
+        steer_messages: list[dict] | None,
+        steer_trace: dict[str, Any],
+        stream: bool,
+        on_tick,
+    ) -> tuple[int, dict[str, str], str, bytes]:
         """Fetch once, apply the early-stop retry / synthetic continue."""
         status, resp_headers, content_type, payload = self._fetch_buffered(
             path, body, headers, on_tick
@@ -2936,11 +3821,29 @@ class Handler(BaseHTTPRequestHandler):
                 if status != 200:
                     return status, resp_headers, content_type, payload
                 is_sse = stream or "text/event-stream" in content_type
-        want_retry = (
-            parsed is not None
-            and steer_trace.get("after_tool_continue")
-            and _active_harness().get("mw_early_stop", True)
-        )
+        want_retry = parsed is not None and _early_stop_armed(steer_trace)
+        # Prose tool call -> real tool_calls (both transports, no retry).
+        if parsed is not None and parsed.get("tools"):
+            if is_sse:
+                text0, has_tools0 = _sse_text_and_tools(payload)
+            elif "application/json" in content_type:
+                text0, has_tools0 = _json_text_and_tools(payload)
+            else:
+                text0, has_tools0 = "", True
+            if not has_tools0:
+                pseudo = _pseudo_tool_calls(text0, parsed)
+                if pseudo:
+                    _repair_tool_calls_list(pseudo, steer_messages)
+                    model, rid = _payload_ids(payload, sse=is_sse)
+                    log.info(
+                        "[agent] prose tool call -> tool_calls %s %s",
+                        pseudo[0]["function"]["name"],
+                        pseudo[0]["function"]["arguments"][:100],
+                    )
+                    steer_trace["prose_tool_call"] = True
+                    if is_sse:
+                        return status, resp_headers, content_type, _sse_tool_payload(pseudo, model, rid)
+                    return status, resp_headers, content_type, _json_tool_payload(pseudo, model, rid)
         if is_sse:
             text, has_tools = _sse_text_and_tools(payload)
             if want_retry and _should_force_continue(text, has_tools, steer_messages):
@@ -2955,6 +3858,14 @@ class Handler(BaseHTTPRequestHandler):
                     return status, resp_headers, content_type, payload
                 is_sse = stream or "text/event-stream" in content_type
                 text, has_tools = _sse_text_and_tools(payload)
+                if not has_tools:
+                    pseudo = _pseudo_tool_calls(text, parsed)
+                    if pseudo:
+                        _repair_tool_calls_list(pseudo, steer_messages)
+                        model, rid = _payload_ids(payload, sse=True)
+                        log.info("[agent] prose tool call (after retry) -> tool_calls %s", pseudo[0]["function"]["name"])
+                        steer_trace["prose_tool_call"] = True
+                        return status, resp_headers, content_type, _sse_tool_payload(pseudo, model, rid)
                 if _should_force_continue(text, has_tools, steer_messages):
                     tcs = _synthetic_tool_calls(text, steer_messages)
                     if tcs:
@@ -2990,6 +3901,14 @@ class Handler(BaseHTTPRequestHandler):
                 if "application/json" in content_type:
                     payload = _repair_response_payload(payload, steer_messages)
                 text, has_tools = _json_text_and_tools(payload)
+                if not has_tools:
+                    pseudo = _pseudo_tool_calls(text, parsed)
+                    if pseudo:
+                        _repair_tool_calls_list(pseudo, steer_messages)
+                        model, rid = _payload_ids(payload, sse=False)
+                        log.info("[agent] prose tool call (after retry) -> tool_calls %s", pseudo[0]["function"]["name"])
+                        steer_trace["prose_tool_call"] = True
+                        return status, resp_headers, content_type, _json_tool_payload(pseudo, model, rid)
                 if _should_force_continue(text, has_tools, steer_messages):
                     tcs = _synthetic_tool_calls(text, steer_messages)
                     if tcs:
@@ -3021,6 +3940,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             and k.lower() not in _SESSION_HEADER_DROP
         }
+        # The proxy owns every control it sends (sampling, enable_thinking,
+        # reasoning_effort). mtplx honours anonymous body controls by default;
+        # this header keeps that true if an operator ever sets
+        # MTPLX_CLIENT_CONTROLS_DEFAULT=hints on the engine.
+        headers["X-MTPLX-Allow-Client-Controls"] = "1"
 
         path = self.path
         stream = False
@@ -3044,11 +3968,12 @@ class Handler(BaseHTTPRequestHandler):
                     if isinstance(msgs, list):
                         steer_messages = msgs
                     log.info(
-                        "[steer] temp=%s think=%s fp=%s ntools=%s max_tokens=%s "
+                        "[steer] temp=%s think=%s/%s fp=%s ntools=%s max_tokens=%s "
                         "compaction=%s empty_rec=%s fake=%s prose=%s "
-                        "after_tool=%s trunc=%s repeat=%s trimmed=%s nmsg=%s",
+                        "after_tool=%s first_turn=%s trunc=%s repeat=%s cycle=%s trimmed=%s nmsg=%s",
                         data.get("temperature"),
                         data.get("enable_thinking"),
+                        data.get("reasoning_effort") or "-",
                         data.get("frequency_penalty"),
                         len(data.get("tools") or []),
                         data.get("max_tokens"),
@@ -3057,8 +3982,10 @@ class Handler(BaseHTTPRequestHandler):
                         steer_trace.get("fake_action_recovery"),
                         steer_trace.get("prose_loop_recovery"),
                         steer_trace.get("after_tool_continue"),
+                        steer_trace.get("first_turn_guard"),
                         steer_trace.get("truncated_tool_msgs"),
                         steer_trace.get("repeat_count"),
+                        steer_trace.get("cycle_max"),
                         steer_trace.get("trimmed_msgs"),
                         len(msgs) if isinstance(msgs, list) else 0,
                     )
@@ -3070,16 +3997,28 @@ class Handler(BaseHTTPRequestHandler):
         headers["Connection"] = "close"
         chat = _is_chat_path(path)
 
-        if chat and steer_trace.get("repeat_stop") and parsed is not None:
-            # Hard stop: N identical assistant turns in a row. Do not spend
+        stale_stop = bool(steer_trace.get("cycle_stale_stop"))
+        if chat and (steer_trace.get("repeat_stop") or stale_stop) and parsed is not None:
+            # Hard stop: N identical assistant turns in a row, or a cycle of any
+            # period that has gone N turns without a new action. Do not spend
             # another engine slot; end the turn with a visible explanation.
             n = int(steer_trace.get("repeat_count") or 0)
-            what = str(steer_trace.get("repeat_what") or "same action")
-            text = _REPEAT_STOP_TEXT.format(n=n, what=what)
+            if stale_stop and not steer_trace.get("repeat_stop"):
+                stale = int(steer_trace.get("cycle_stale") or 0)
+                what = str(steer_trace.get("cycle_what") or "the same few commands")
+                text = _CYCLE_STOP_TEXT.format(what=what[:160])
+                rid = f"chatcmpl-proxy-cycle-{int(time.time())}"
+                log.warning("[agent] cycle guard: hard stop stale=%s what=%r", stale, what)
+                append_live_event(
+                    {"cycle_stale_stop": True, "cycle_stale": stale, "what": what}
+                )
+            else:
+                what = str(steer_trace.get("repeat_what") or "same action")
+                text = _REPEAT_STOP_TEXT.format(n=n, what=what)
+                rid = f"chatcmpl-proxy-repeat-{int(time.time())}"
+                log.warning("[agent] repeat guard: hard stop n=%s what=%r", n, what)
+                append_live_event({"repeat_hard_stop": True, "repeat_count": n, "what": what})
             model = str(parsed.get("model") or "qwen3.8-27b-obliterated-mtplx")
-            rid = f"chatcmpl-proxy-repeat-{int(time.time())}"
-            log.warning("[agent] repeat guard: hard stop n=%s what=%r", n, what)
-            append_live_event({"repeat_hard_stop": True, "repeat_count": n, "what": what})
             try:
                 if stream:
                     self._sse_begin()
@@ -3232,8 +4171,15 @@ def _self_check() -> None:
     assert kilo_like["temperature"] == 0.0, kilo_like
     assert kilo_like["top_p"] == 1.0, kilo_like
     assert kilo_like["frequency_penalty"] == CARD_FREQUENCY_PENALTY, kilo_like
-    assert kilo_like["enable_thinking"] is False, kilo_like
+    # Tool turn: thinking ON (bounded by the engine budget), effort validated.
+    assert kilo_like["enable_thinking"] is THINKING, kilo_like
+    if THINKING:
+        assert kilo_like["reasoning_effort"] in _REASONING_EFFORT_CHOICES, kilo_like
+        assert AGENT_MAX_TOKENS_FLOOR >= 2048 + THINKING_BUDGET
+    else:
+        assert "reasoning_effort" not in kilo_like, kilo_like
     assert kilo_like["max_tokens"] == AGENT_MAX_TOKENS_FLOOR, kilo_like
+    assert AGENT_MAX_TOKENS_CAP >= AGENT_MAX_TOKENS_FLOOR
     assert LOOP_MARKER in kilo_like["messages"][0]["content"]
     assert tr.get("loop_prompt") is True
     # First user turn must NOT get empty-tool / after-tool hooks (over-broad).
@@ -3249,8 +4195,139 @@ def _self_check() -> None:
         "messages": [{"role": "user", "content": "compact the conversation"}],
         "temperature": 1.0,
     }
+    # Duplicate-call detection: response sig must match the history sig.
+    hist = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "bash", "arguments": "{\"command\": \"cat a.md\"}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "A CONTENT"},
+    ]
+    def _ev(delta: dict, finish=None) -> str:
+        return "data: " + json.dumps(
+            {"id": "x", "model": "m", "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        ) + "\n\n"
+    sse = (
+        _ev({"tool_calls": [{"index": 0, "id": "c2", "type": "function",
+                             "function": {"name": "bash", "arguments": '{"comm'}}]})
+        + _ev({"tool_calls": [{"index": 0, "function": {"arguments": 'and": "cat a.md"}'}}]})
+        + _ev({}, "tool_calls")
+        + "data: [DONE]\n\n"
+    ).encode()
+    tcs = _payload_tool_calls(sse, sse=True)
+    assert tcs == [{"name": "bash", "arguments": '{"command": "cat a.md"}'}], tcs
+    assert _tool_calls_sig(tcs) == _last_assistant_tool_sig(hist), (_tool_calls_sig(tcs), _last_assistant_tool_sig(hist))
+    assert _payload_finish_reason(sse, sse=True) == "tool_calls"
+    assert _last_tool_result_head(hist) == "A CONTENT"
+    dup_body = {"messages": list(hist), "tools": [{"type": "function"}]}
+    _apply_duplicate_retry(dup_body, "bash(cat a.md)", "A CONTENT")
+    assert dup_body["messages"][-1]["role"] == "user" and "A CONTENT" in dup_body["messages"][-1]["content"]
+    assert _tool_rounds_since_user(dup_body["messages"]) == 1  # harness user msg is skipped
+    assert REPEAT_NO_TOOLS > 3 and AFTER_TOOL_NUDGE_MAX >= 20
+
+    # Prose tool calls -> real tool_calls (the 19:08 live trace shape and kin).
+    tools_body = {"tools": [
+        {"type": "function", "function": {"name": "bash", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {"filePath": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["filePath"]}}},
+    ]}
+    live = "<bash>\n\nls -la /tmp/x/ 2>/dev/null; echo ---TOOLS---; ls /tmp/y/ | head -60\n\n\n"
+    pt = _pseudo_tool_calls(live, tools_body)
+    assert pt and pt[0]["function"]["name"] == "bash", pt
+    assert json.loads(pt[0]["function"]["arguments"])["command"].startswith("ls -la /tmp/x/"), pt
+    pt = _pseudo_tool_calls("<read>\n<filePath>README.md</filePath>\n<limit>150</limit>\n</read>", tools_body)
+    assert pt and json.loads(pt[0]["function"]["arguments"]) == {"filePath": "README.md", "limit": 150}, pt
+    pt = _pseudo_tool_calls('<tool_call>{"name": "read", "arguments": {"filePath": "a.md"}}', tools_body)
+    assert pt and pt[0]["function"]["name"] == "read", pt
+    pt = _pseudo_tool_calls("```bash\ngrep -rn foo src | head\n```", tools_body)
+    assert pt and "grep -rn foo" in pt[0]["function"]["arguments"], pt
+    assert _pseudo_tool_calls("The build passes; nothing else to do.", tools_body) == []
+    assert _pseudo_tool_calls("Use <b>bold</b> here.", tools_body) == []  # unknown tag
+    # A declared tool name mentioned in prose is NOT an invocation.
+    assert _pseudo_tool_calls("I'll use the <bash> tool to list files.", tools_body) == []
+    assert _pseudo_tool_calls("Next I will <read> the config file.", tools_body) == []
+    # ... but a closed tag mid-reply still is.
+    pt = _pseudo_tool_calls("Let me check.\n<bash>ls -la</bash>", tools_body)
+    assert pt and json.loads(pt[0]["function"]["arguments"]) == {"command": "ls -la"}, pt
+    assert _pseudo_tool_calls(live, {"tools": []}) == []
+    pt = _pseudo_tool_calls('[Tool calls: bash({"command": "tail -60 J.md"})]', tools_body)
+    assert pt and json.loads(pt[0]["function"]["arguments"])["command"] == "tail -60 J.md", pt
+    pt = _pseudo_tool_calls('Let me check.\n[Calling tool: read({"filePath": "a.md"})]', tools_body)
+    assert pt and pt[0]["function"]["name"] == "read", pt
+
+    # Non-consecutive cycle: A B C A B C A -> max recurrence 3, no consecutive.
+    def _asst(cmd):
+        return {"role": "assistant", "content": "Let me look.",
+                "tool_calls": [{"id": "x", "type": "function",
+                                "function": {"name": "bash", "arguments": json.dumps({"command": cmd})}}]}
+    cyc_msgs = [{"role": "user", "content": "go"}]
+    for cmd in ["ls recent", "read SUMMARY", "tail JOURNAL", "ls recent", "read SUMMARY", "tail JOURNAL", "ls recent"]:
+        cyc_msgs.append(_asst(cmd))
+        cyc_msgs.append({"role": "tool", "content": "out"})
+    cyc_max, cyc_distinct, cyc_what = _assistant_cycle(cyc_msgs)
+    assert cyc_max == 3 and cyc_distinct == 3, (cyc_max, cyc_distinct)
+    assert _assistant_repeat_count(cyc_msgs)[0] == 1  # invisible to consecutive guard
+    cyc_body = {"tools": [{"type": "function", "function": {"name": "bash"}}], "messages": [dict(m) for m in cyc_msgs]}
+    tr_cyc: dict[str, Any] = {}
+    prepare_body(cyc_body, tr_cyc)
+    assert tr_cyc["cycle_recovery"] is True and tr_cyc["cycle_max"] == 3, tr_cyc
+    assert "tools" in cyc_body  # cycle keeps tools (redirect, not stop)
+    assert "[Harness] LOOP DETECTED:" in cyc_body["messages"][0]["content"]
+    if THINKING:
+        assert cyc_body.get("reasoning_effort") == "xhigh" and tr_cyc.get("cycle_escalate_effort") is True, cyc_body
+    # A healthy varied run does not trip it.
+    ok_msgs = [{"role": "user", "content": "go"}]
+    for cmd in ["ls", "read a", "grep b", "edit c", "test d"]:
+        ok_msgs.append(_asst(cmd)); ok_msgs.append({"role": "tool", "content": "out"})
+    assert _assistant_cycle(ok_msgs)[0] == 1
+    # Cycle-break: a signature seen >= CYCLE_BREAK_MIN times is banned; effort
+    # escalates to xhigh on cycle detection.
+    ban_msgs = [{"role": "user", "content": "go"}]
+    for _ in range(CYCLE_BREAK_MIN):
+        ban_msgs.append(_asst("tail -c 2000 J.md"))
+        ban_msgs.append({"role": "tool", "content": "same"})
+    banned = _cycled_signatures(ban_msgs, CYCLE_BREAK_MIN)
+    assert 'bash({"command": "tail -c 2000 J.md"})' in banned, banned
+    assert _cycled_signatures(ban_msgs, CYCLE_BREAK_MIN + 1) == set()
+    # Below the break threshold the command is not yet banned.
+    assert _cycled_signatures(ban_msgs[:-4], CYCLE_BREAK_MIN) == set()
+
+    # Novelty starvation: the exit for cycles of ANY period. A 2-, 3- or
+    # 4-cycle is invisible to both the consecutive guard and the ban list, so
+    # the stale counter is the only thing that can end those turns.
+    def _cycle_msgs(period_cmds, rounds):
+        msgs = [{"role": "user", "content": "go"}]
+        for i in range(rounds):
+            msgs.append(_asst(period_cmds[i % len(period_cmds)]))
+            msgs.append({"role": "tool", "content": "nothing new"})
+        return msgs
+    for cmds in (["A"], ["A", "B"], ["A", "B", "C"], ["A", "B", "C", "D"]):
+        loop_msgs = _cycle_msgs(cmds, 20)
+        stale = _turns_since_new_signature(loop_msgs)
+        assert stale == 20 - len(cmds), (cmds, stale)
+        assert stale >= CYCLE_STALE_STOP, (cmds, stale)
+    # Neither the consecutive guard nor the ban list can see a 3-cycle.
+    three = _cycle_msgs(["A", "B", "C"], 20)
+    assert _assistant_repeat_count(three)[0] == 1
+    assert _cycled_signatures(three, CYCLE_BREAK_MIN) == set()
+    # Progress resets it: a new signature at the end means stale == 0.
+    assert _turns_since_new_signature(three + [_asst("E"), {"role": "tool", "content": "new"}]) == 0
+    # A varied run never accumulates staleness.
+    assert _turns_since_new_signature(ok_msgs) == 0
+    # End-to-end: the 3-cycle turn loses its tools and is marked for a stop.
+    stale_body = {"tools": [{"type": "function", "function": {"name": "bash"}}],
+                  "messages": [dict(m) for m in three]}
+    tr_stale: dict[str, Any] = {}
+    prepare_body(stale_body, tr_stale)
+    assert tr_stale["cycle_stale"] == 17, tr_stale
+    assert tr_stale["cycle_stale_no_tools"] is True and tr_stale["cycle_stale_stop"] is True, tr_stale
+    assert "tools" not in stale_body, stale_body  # forced to answer in text
+    assert tr_stale.get("cycle_what"), tr_stale
+
     prepare_body(compact)
     assert "tools" not in compact
+    assert compact["enable_thinking"] is False and "reasoning_effort" not in compact, compact
+    plain = {"messages": [{"role": "user", "content": "title please"}], "max_tokens": 32}
+    prepare_body(plain)
+    assert plain["enable_thinking"] is False and "reasoning_effort" not in plain, plain
     assert compact["tool_choice"] == "none"
 
     kilo_agent_with_summary_boilerplate = {
@@ -3335,7 +4412,7 @@ def _self_check() -> None:
         {"role": "system", "content": "You are a coding agent."},
         {"role": "user", "content": "proceed with the research"},
     ]
-    for i in range(1, 5):
+    for i in range(1, AFTER_TOOL_NUDGE_MAX + 2):
         cap_msgs.append(
             {
                 "role": "assistant",
@@ -3361,13 +4438,13 @@ def _self_check() -> None:
         "max_tokens": 128,
     }
     # First inject the JIT nudge (as if round 1 already happened), then
-    # prepare the 4-tool history so the cap strips it.
+    # prepare the (cap+1)-tool history so the cap strips it.
     cap_msgs[0]["content"] += _AFTER_TOOL_NUDGE
     tr_cap: dict[str, Any] = {}
     prepare_body(cap_body, tr_cap)
     assert tr_cap.get("after_tool_continue") is False, tr_cap
     assert "[Harness] Tool result received." not in cap_body["messages"][0]["content"]
-    assert _tool_rounds_since_user(cap_msgs) == 4
+    assert _tool_rounds_since_user(cap_msgs) == AFTER_TOOL_NUDGE_MAX + 1
     plan = "Next steps\nE1 ecall 0x49 — one next RE probe on host wrapper.\n"
     assert _should_force_continue(plan, False, cap_msgs) is False
 
@@ -3534,6 +4611,144 @@ def _self_check() -> None:
     assert UPSTREAM_TIMEOUT >= 120
     assert _needs_buffered_sse({"after_tool_continue": False}) is False
     assert _needs_buffered_sse({"after_tool_continue": True}) is True
+    # First-turn guard: the reply right after a user prompt is buffered and
+    # a plan dump there is forced into tool_calls; tool rounds are unchanged.
+    assert _needs_buffered_sse({"first_turn_guard": True}) is True
+    assert _needs_buffered_sse({"first_turn_guard": True, "repeat_no_tools": True}) is False
+    ft_body = {
+        "tools": [{"type": "function", "function": {"name": "bash"}}],
+        "messages": [
+            {"role": "system", "content": "You are a coding agent."},
+            {"role": "user", "content": "review this repo and run the tests"},
+        ],
+        "max_tokens": 128,
+    }
+    tr_ft: dict[str, Any] = {}
+    prepare_body(ft_body, tr_ft)
+    assert tr_ft.get("first_turn_guard") is True
+    assert tr_ft.get("after_tool_continue") is False
+    assert "[Harness] Tool result received." not in ft_body["messages"][0]["content"]
+    ft_plan = (
+        "I'll start by reading the README to understand the layout.\n\n"
+        "Next steps:\n1. Read README.md\n2. Run the tests"
+    )
+    assert _should_force_continue(ft_plan, False, ft_body["messages"]) is True
+    assert _should_force_continue("", False, ft_body["messages"]) is True
+    assert _should_force_continue("The tests pass; 40/40 green.", False, ft_body["messages"]) is False
+    assert _should_force_continue(ft_plan, True, ft_body["messages"]) is False
+    ft_tool = {
+        "tools": [{"type": "function", "function": {"name": "bash"}}],
+        "messages": [
+            {"role": "system", "content": "You are a coding agent."},
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "t1", "function": {"name": "bash", "arguments": '{"command":"ls"}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "t1", "content": "README.md"},
+        ],
+        "max_tokens": 128,
+    }
+    tr_ft2: dict[str, Any] = {}
+    prepare_body(ft_tool, tr_ft2)
+    assert tr_ft2.get("first_turn_guard") is False
+    assert tr_ft2.get("after_tool_continue") is True
+    # Forced retry now covers every nudged round (1..AFTER_TOOL_NUDGE_MAX).
+    rounds_msgs = list(ft_tool["messages"])
+    for i in range(2, AFTER_TOOL_NUDGE_MAX + 1):
+        rounds_msgs.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": f"t{i}", "function": {"name": "bash", "arguments": '{"command":"ls"}'}}
+                ],
+            }
+        )
+        rounds_msgs.append({"role": "tool", "tool_call_id": f"t{i}", "content": "ok"})
+    assert _tool_rounds_since_user(rounds_msgs) == AFTER_TOOL_NUDGE_MAX
+    assert _should_force_continue(ft_plan, False, rounds_msgs) is True
+    rounds_msgs.append(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "tx", "function": {"name": "bash", "arguments": '{"command":"ls"}'}}],
+        }
+    )
+    rounds_msgs.append({"role": "tool", "tool_call_id": "tx", "content": "ok"})
+    assert _should_force_continue(ft_plan, False, rounds_msgs) is False
+
+    # Stop condition: hand-back endings count as an early stop.
+    for hand_back in (
+        "I've read both reports. Let me know if you want me to continue with the memcpy sites.",
+        "Summary so far: 8 sites triaged.\n\nRemaining work: the 95 Semgrep findings.",
+        "Would you like me to proceed with the ecall49 analysis?",
+        "The patch is written but not yet tested against the harness.",
+    ):
+        assert _is_early_stop_plan(hand_back, False) is True, hand_back
+    for final in (
+        "All 40 unit checks pass; the self-check is green and the README row is updated.",
+        "Root cause: the sanitizer rewrote an existing path to its bare basename.",
+    ):
+        assert _is_early_stop_plan(final, False) is False, final
+
+    # Verification gate: edit then answer (no run/read since) is forced once.
+    vg_msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "fix the bug"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "v1", "function": {"name": "read", "arguments": '{"filePath":"a.py"}'}}]},
+        {"role": "tool", "tool_call_id": "v1", "content": "def f(): pass"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "v2", "function": {"name": "edit", "arguments": '{"filePath":"a.py"}'}}]},
+        {"role": "tool", "tool_call_id": "v2", "content": "Edit applied successfully."},
+    ]
+    assert _unverified_edit(vg_msgs) is True
+    assert _should_force_continue("Fixed: f() now returns 1.", False, vg_msgs) is True
+    vg_body = {"messages": list(vg_msgs)}
+    _apply_early_stop_retry(vg_body)
+    assert "[Harness] VERIFY GATE:" in vg_body["messages"][0]["content"]
+    assert vg_body["messages"][-1]["role"] == "user"
+    assert "[Harness] VERIFY GATE:" in vg_body["messages"][-1]["content"]
+    assert _tool_rounds_since_user(vg_body["messages"]) == 2  # harness user ignored
+    _apply_early_stop_retry(vg_body)
+    assert vg_body["messages"][0]["content"].count("[Harness] VERIFY GATE:") == 1
+    assert sum(1 for m in vg_body["messages"] if m["role"] == "user") == 2
+    vg_msgs.append({"role": "assistant", "content": None, "tool_calls": [
+        {"id": "v3", "function": {"name": "bash", "arguments": '{"command":"pytest -q"}'}}]})
+    vg_msgs.append({"role": "tool", "tool_call_id": "v3", "content": "3 passed"})
+    assert _unverified_edit(vg_msgs) is False
+    assert _should_force_continue("Fixed: f() now returns 1. 3 tests pass.", False, vg_msgs) is False
+
+    # Bash sanitizer: an existing path is never rewritten to a bare basename
+    # (the 2026-09-02 Titan M2 repeat-guard loop).
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as ws_dir:
+        nested = Path(ws_dir) / "analysis" / "autohunt"
+        nested.mkdir(parents=True)
+        (nested / "STATE.json").write_text("{}")
+        (nested / "JOURNAL.md").write_text("# j")
+        san_msgs = [
+            {"role": "system", "content": f"Current Workspace Directory ({ws_dir})"},
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "s1", "function": {"name": "bash", "arguments": '{"command":"ls analysis/autohunt"}'}}]},
+            {"role": "tool", "tool_call_id": "s1", "content": "STATE.json\nJOURNAL.md\n"},
+        ]
+        good = f"cd {ws_dir} && cat analysis/autohunt/STATE.json; echo ---; head -60 analysis/autohunt/JOURNAL.md"
+        assert _rewrite_missing_path_command(good, san_msgs) is None, _rewrite_missing_path_command(good, san_msgs)
+        assert _sanitize_bash_command(good, san_msgs) == good
+        rel_good = "cat analysis/autohunt/STATE.json"
+        assert _sanitize_bash_command(rel_good, san_msgs) == rel_good
+        # A genuinely missing path with a known qualified sibling is still fixed.
+        san_msgs[-1]["content"] = "analysis/autohunt/STATE.json\n"
+        assert _rewrite_missing_path_command("cat STATE.json", san_msgs) == "cat analysis/autohunt/STATE.json"
+        assert _leading_cd_dir("cd /tmp && ls") == "/tmp"
+        assert _leading_cd_dir("ls /tmp") is None
 
     # Stability: runaway greedy completions are capped, floors still apply.
     cap_body = {
@@ -3634,7 +4849,9 @@ def _self_check() -> None:
     evs, rest = _split_sse_events(b"data: 1\r\n\r\ndata: 2\n\n")
     assert len(evs) == 2 and rest == b""
 
-    # Repeat guard: same tool call three turns running -> nudge, tools gone.
+    # Repeat guard: same tool call REPEAT_NO_TOOLS turns running -> nudge,
+    # tools gone; below that the nudge alone (tools kept: the response-side
+    # duplicate retry gets its chance first).
     rep_call = {
         "id": "c1",
         "type": "function",
@@ -3646,23 +4863,36 @@ def _self_check() -> None:
         rep_msgs.append({"role": "tool", "tool_call_id": "c1", "content": "# notes\nline"})
     n_rep, sig_rep = _assistant_repeat_count(rep_msgs)
     assert n_rep == 3 and sig_rep.startswith("read(")
+    rep_body3 = {
+        "tools": [{"type": "function", "function": {"name": "read"}}],
+        "messages": [dict(m) for m in rep_msgs],
+    }
+    tr_rep3: dict[str, Any] = {}
+    prepare_body(rep_body3, tr_rep3)
+    assert tr_rep3["repeat_count"] == 3 and tr_rep3["repeat_recovery"] is True
+    assert tr_rep3["repeat_no_tools"] is False and "tools" in rep_body3, tr_rep3
+    assert rep_body3["enable_thinking"] is THINKING
+    while _assistant_repeat_count(rep_msgs)[0] < REPEAT_NO_TOOLS:
+        rep_msgs.append({"role": "assistant", "content": "Let me check the notes.", "tool_calls": [dict(rep_call)]})
+        rep_msgs.append({"role": "tool", "tool_call_id": "c1", "content": "# notes\nline"})
     rep_body = {
         "tools": [{"type": "function", "function": {"name": "read"}}],
         "messages": [dict(m) for m in rep_msgs],
     }
     tr_rep: dict[str, Any] = {}
     prepare_body(rep_body, tr_rep)
-    assert tr_rep["repeat_count"] == 3 and tr_rep["repeat_recovery"] is True
+    assert tr_rep["repeat_count"] == REPEAT_NO_TOOLS and tr_rep["repeat_recovery"] is True
     assert tr_rep["repeat_no_tools"] is True and tr_rep["repeat_stop"] is False
     assert "tools" not in rep_body and rep_body["tool_choice"] == "none"
+    assert rep_body["enable_thinking"] is False  # no tools -> no budget -> no think
     assert "[Harness] REPEATED ACTION" in rep_body["messages"][0]["content"]
     assert rep_body["messages"][0]["content"].count("[Harness] REPEATED ACTION") == 1
-    # Four in a row -> hard stop flag (the handler answers without upstream).
+    # One more -> hard stop flag (the handler answers without upstream).
     rep_msgs.append({"role": "assistant", "content": "Let me check the notes.", "tool_calls": [dict(rep_call)]})
     rep_msgs.append({"role": "tool", "tool_call_id": "c1", "content": "# notes\nline"})
     tr_rep4: dict[str, Any] = {}
     prepare_body({"tools": [{"type": "function", "function": {"name": "read"}}], "messages": rep_msgs}, tr_rep4)
-    assert tr_rep4["repeat_stop"] is True and tr_rep4["repeat_count"] == 4
+    assert tr_rep4["repeat_stop"] is True and tr_rep4["repeat_count"] == REPEAT_HARD_STOP
     # A different call in between breaks the chain (git status before/after a
     # commit is legitimate).
     mixed = [
@@ -3764,10 +4994,13 @@ def main(argv: list[str] | None = None) -> int:
     Handler.state = state
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     log.info(
-        "OBLITERATED kilo proxy on http://%s:%d → %s (greedy, thinking off)",
+        "OBLITERATED kilo proxy on http://%s:%d → %s (greedy, thinking %s)",
         args.host,
         args.port,
         state.upstream,
+        f"{REASONING_EFFORT} budget={THINKING_BUDGET} on tool turns"
+        if THINKING
+        else "off",
     )
     try:
         server.serve_forever()

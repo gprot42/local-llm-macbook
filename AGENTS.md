@@ -47,4 +47,35 @@ If the latest tool output is **empty** / “(no output)” / useless remote HTML
 3. If `FileNotFound`, list the **parent** directory — do not invent a new research plan.
 4. Avoid another `curl | grep` of remote pages unless the user only asked for web docs.
 
+## Conclude decisively
+
+Brevity caps limit **padding and exploration**, not the substance of the answer.
+
+1. Every final reply ends with a **definitive conclusion**: the direct answer, the root cause, or the verified result of the edit.
+2. Never end with a light acknowledgement, a restatement of the request, or a partial observation. State what the tools proved and what it means.
+3. Do not hedge (“it might be…”, “you could check…”) when you can check yourself — check, then state the result. If truly uncertain: single best answer + the one command that confirms it.
+4. Coding/debugging: finish with **what changed**, **how it was verified** (exact command + result), and remaining caveats. Do not stop before the verification result exists.
+
+### Canonical prompt block
+
+The fenced block below is the **single source of truth** for the wording shipped
+inside every `agent.*.prompt` in every `kilo.json`. Edit it here, then run
+`./sync_agent_prompts.py` to push it into all of them; `--check` fails if any
+copy has drifted. Do not hand-edit the block inside a `kilo.json`.
+
+Kilo's `instructions: ["AGENTS.md"]` resolves against the *opened project*, not
+this repo, and two stacks ship no `AGENTS.md` at all — so the text has to be
+inline in each prompt. This block is how it stays identical.
+
+<!-- BEGIN kilo:conclude-decisively -->
+```text
+Conclude decisively (critical):
+- Brevity rules limit padding and exploration, NOT the substance of your answer. Every final reply must contain a definitive conclusion: the direct answer, the root cause, or the verified result of your edit.
+- Never end with a light acknowledgement, a restatement of the request, or a partial observation. If you ran tools, state what they proved and what it means for the user's question.
+- Commit to an answer. Do not hedge with "it might be" / "you could check" when you have the tools to check; check, then state the result. If genuinely uncertain, give your single best answer and the one command that confirms it.
+- Q&A: answer completely, as long as the answer genuinely requires (usually short); the line cap is a target, not a reason to omit the conclusion.
+- Coding/debugging: finish with what changed, how it was verified (exact command + result), and any remaining caveat. Do not stop before the verification result exists.
+```
+<!-- END kilo:conclude-decisively -->
+
 Stack-specific detail: [`censored/deepseek-v4-flash-ds4/AGENTS.md`](censored/deepseek-v4-flash-ds4/AGENTS.md).
