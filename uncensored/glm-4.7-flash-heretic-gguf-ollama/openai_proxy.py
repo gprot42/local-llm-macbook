@@ -127,7 +127,20 @@ def build_app(
                 saw_tool = False
                 reasoning: list[str] = []
                 held_finish: bytes | None = None
+                done_sent = False
                 meta: dict[str, Any] = {}
+
+                def synth_finish(reason: str) -> bytes:
+                    payload = {
+                        "id": meta.get("id", "chatcmpl-proxy"),
+                        "object": "chat.completion.chunk",
+                        "created": meta.get("created", int(time.time())),
+                        "model": meta.get("model", ""),
+                        "choices": [
+                            {"index": 0, "delta": {}, "finish_reason": reason}
+                        ],
+                    }
+                    return b"data: " + json.dumps(payload).encode() + b"\n\n"
 
                 def synth_content() -> bytes:
                     payload = {
@@ -155,11 +168,13 @@ def build_app(
 
                 def process_event(ev: bytes) -> list[bytes]:
                     # ev is one SSE event without its trailing blank line.
-                    nonlocal saw_content, saw_tool, held_finish
+                    nonlocal saw_content, saw_tool, held_finish, done_sent
                     text = ev.strip()
                     if not text or text.startswith(b":"):
                         return [ev + b"\n\n"]  # comment / keepalive — pass through
                     if not reasoning_fallback:
+                        if text == b"data: [DONE]" or text == b"data:[DONE]":
+                            done_sent = True
                         return [ev + b"\n\n"]
                     if text == b"data: [DONE]" or text == b"data:[DONE]":
                         outs: list[bytes] = []
@@ -169,6 +184,7 @@ def build_app(
                             outs.append(held_finish)
                             held_finish = None
                         outs.append(ev + b"\n\n")
+                        done_sent = True
                         return outs
                     if not text.startswith(b"data:"):
                         return [ev + b"\n\n"]
@@ -203,6 +219,7 @@ def build_app(
 
                 raw = upstream_resp.aiter_raw()
                 read_task: asyncio.Task | None = None
+                stream_error: BaseException | None = None
                 try:
                     while True:
                         if heartbeat and heartbeat > 0:
@@ -218,12 +235,18 @@ def build_app(
                                 chunk = read_task.result()
                             except StopAsyncIteration:
                                 chunk = None
+                            except Exception as exc:  # upstream dropped mid-stream
+                                stream_error = exc
+                                chunk = None
                             finally:
                                 read_task = None
                         else:
                             try:
                                 chunk = await raw.__anext__()
                             except StopAsyncIteration:
+                                chunk = None
+                            except Exception as exc:  # upstream dropped mid-stream
+                                stream_error = exc
                                 chunk = None
                         if chunk is None:
                             break
@@ -232,14 +255,26 @@ def build_app(
                             ev, buf = buf.split(b"\n\n", 1)
                             for out in process_event(ev):
                                 yield out
-                    # Flush any trailing partial event and a still-held finish.
+                    # Flush a trailing partial event, if any.
                     if buf.strip():
                         for out in process_event(buf):
                             yield out
-                    if held_finish is not None:
-                        if not saw_content and not saw_tool and reasoning:
+                    # Always terminate the client stream with a finish reason and a
+                    # [DONE]. Without this, an upstream drop after the finish chunk
+                    # was buffered (or before it arrived at all) would leave the
+                    # client with no finish reason — the "response ended without a
+                    # finish reason / incomplete" case.
+                    if not done_sent:
+                        if reasoning_fallback and not saw_content and not saw_tool and reasoning:
                             yield synth_content()
-                        yield held_finish
+                        if held_finish is not None:
+                            yield held_finish
+                            held_finish = None
+                        elif stream_error is not None:
+                            yield synth_finish("stop")
+                        yield b"data: [DONE]\n\n"
+                    if stream_error is not None:
+                        log.warning("upstream stream ended early: %r", stream_error)
                 finally:
                     if read_task is not None:
                         read_task.cancel()
