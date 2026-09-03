@@ -16,7 +16,12 @@
 #   --ollama-port N   Ollama HTTP port (default: 11434)
 #   --proxy-port N    Harness proxy port (default: 18083)
 #   --bind-all        Bind the proxy on 0.0.0.0 (default: 127.0.0.1 only)
-#   --ctx-size N      Context window passed to Ollama (default: 131072)
+#   --ctx-size N      Context window passed to Ollama (default: 65536).
+#                     Capped below the model's 131072 max on purpose: decode
+#                     speed collapses at high context on this stack (~78 tok/s
+#                     near-empty vs ~8 tok/s at ~73k), so keeping sessions under
+#                     ~64k keeps them responsive. Kilo's limit.context must stay
+#                     <= this, or Ollama silently truncates the prompt.
 #   --quant q4|q5|q6|q8   Override quant (default q8; reads .glm47_config)
 #   --temp T          Sampling temperature (default: 0.6)
 #   --greedy          Shorthand for --temp 0
@@ -47,7 +52,7 @@ PREFIX="GLM-4.7-Flash-Uncen-Hrt-NEO-CODE-MAX-imat-D_AU"
 OLLAMA_PORT=11434
 PROXY_PORT=18083
 HOST="127.0.0.1"
-CTX_SIZE=131072
+CTX_SIZE=65536
 KEEP_ALIVE="30m"
 DO_WARM=true
 TEMP="0.6"

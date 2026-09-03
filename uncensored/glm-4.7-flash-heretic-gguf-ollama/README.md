@@ -32,10 +32,18 @@ brew install ollama
 ./2_start_ollama.sh --quant q6 restart
 ```
 
-### Long context if needed
+### Context window (default 64k, capped on purpose)
+
+`num_ctx` defaults to **65536**, below the model's 131072 max. Decode speed on
+this stack collapses at high context (~78 tok/s near-empty vs ~8 tok/s at ~73k,
+and prompt prefill of an 80k input can take 15+ minutes), so sessions are capped
+to stay responsive. Kilo's `limit.context` (65536) and `limit.output` (8192) in
+`kilo.json` are set to match — **keep `limit.context` ≤ `num_ctx`**, or Ollama
+silently truncates the prompt (dropping the oldest tokens, including the system
+prompt). Raise all three together only if you accept the slowdown:
 
 ```bash
-./2_start_ollama.sh --ctx-size 65536 restart
+./2_start_ollama.sh --ctx-size 131072 restart   # + raise kilo.json limit.context
 ```
 
 ### Keep-alive / cold start
