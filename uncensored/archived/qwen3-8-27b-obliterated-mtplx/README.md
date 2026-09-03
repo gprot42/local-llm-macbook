@@ -114,7 +114,7 @@ The OBLITERATUS card says these settings matter:
 
 **Kilo context limits (measured 2026-09-02).** Decode is ~25 tok/s at ≤30k
 prompt tokens and 2–5 tok/s past ~50k, so the global root
-[`kilo.json`](../../kilo.json) caps this model at `limit.context` **49152** /
+[`kilo.json`](../../../kilo.json) caps this model at `limit.context` **49152** /
 `limit.output` **4096**: with `compaction.reserved` 16384 that makes compaction
 fire at `context − reserved − output` ≈ **28k**, before the collapse. The stack
 `kilo.json` keeps `49152 / 8192` for single-stack use. Either way the proxy

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Keep the shared `Conclude decisively` block identical in every agent prompt.
 
-The block is inline in 18 `agent.*.prompt` strings across four `kilo.json`
+The block is inline in 23 `agent.*.prompt` strings across five `kilo.json`
 files. It has to be: Kilo resolves `instructions: ["AGENTS.md"]` against the
 *opened project*, not this repo, root `kilo.json` ships to
 `~/.config/kilo/kilo.jsonc` where that path means someone else's project, and
-two of the four stacks have no `AGENTS.md` at all. So the text cannot be
+most of the stacks have no `AGENTS.md` at all. So the text cannot be
 hoisted out -- but it can be generated, which is what this does.
 
 AGENTS.md holds the canonical copy between the `kilo:conclude-decisively`
@@ -36,6 +36,7 @@ TARGETS = [
     Path("censored/deepseek-v4-flash-ds4/kilo.json"),
     Path("censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/kilo.json"),
     Path("censored/muse-glimmer-30b-mlx/kilo.json"),
+    Path("uncensored/glm-4.7-flash-heretic-gguf-ollama/kilo.json"),
 ]
 
 

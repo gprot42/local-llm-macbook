@@ -284,7 +284,7 @@ if [[ "${DEPS_ONLY}" == true ]]; then
     echo ""
     echo "✅  Dependencies ready (no model pull)."
     echo "  Re-run without --deps-only to snapshot V3 bf16 and convert mlx-4bit/."
-    echo "  Aligned sibling: ../../censored/qwen3-8-27b-coder-mtplx/"
+    echo "  Aligned sibling: ../../../censored/qwen3-8-27b-coder-mtplx/"
     exit 0
 fi
 

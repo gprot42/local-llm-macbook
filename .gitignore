@@ -130,6 +130,7 @@ Modelfile.generated
 .ollama.Modelfile
 .ornith35b_config
 .ornith15_config
+.glm47_config
 .ornith_kilo_trace.jsonl
 .ornith_proxy.log
 .glm_proxy.log
