@@ -128,6 +128,7 @@ def build_app(
                 reasoning: list[str] = []
                 held_finish: bytes | None = None
                 done_sent = False
+                emitted_finish = False
                 meta: dict[str, Any] = {}
 
                 def synth_finish(reason: str) -> bytes:
@@ -169,6 +170,7 @@ def build_app(
                 def process_event(ev: bytes) -> list[bytes]:
                     # ev is one SSE event without its trailing blank line.
                     nonlocal saw_content, saw_tool, held_finish, done_sent
+                    nonlocal emitted_finish
                     text = ev.strip()
                     if not text or text.startswith(b":"):
                         return [ev + b"\n\n"]  # comment / keepalive — pass through
@@ -183,6 +185,17 @@ def build_app(
                         if held_finish is not None:
                             outs.append(held_finish)
                             held_finish = None
+                            emitted_finish = True
+                        # Ollama can end a reasoning-only turn with [DONE] but no
+                        # finish_reason chunk. Without a finish reason the client
+                        # (Kilo) maps the absent value to "other" and shows
+                        # "Response ended unexpectedly and may be incomplete."
+                        # Guarantee one so the recovered turn reads as a clean stop.
+                        if not emitted_finish:
+                            outs.append(
+                                synth_finish("tool_calls" if saw_tool else "stop")
+                            )
+                            emitted_finish = True
                         outs.append(ev + b"\n\n")
                         done_sent = True
                         return outs
@@ -261,17 +274,21 @@ def build_app(
                             yield out
                     # Always terminate the client stream with a finish reason and a
                     # [DONE]. Without this, an upstream drop after the finish chunk
-                    # was buffered (or before it arrived at all) would leave the
-                    # client with no finish reason — the "response ended without a
-                    # finish reason / incomplete" case.
+                    # was buffered (or before it arrived at all) — or a clean end
+                    # that never carried a finish_reason chunk — would leave the
+                    # client with no finish reason. Kilo maps an absent finish
+                    # reason to "other" and shows "Response ended unexpectedly and
+                    # may be incomplete", so synthesize one whenever none was sent.
                     if not done_sent:
                         if reasoning_fallback and not saw_content and not saw_tool and reasoning:
                             yield synth_content()
                         if held_finish is not None:
                             yield held_finish
                             held_finish = None
-                        elif stream_error is not None:
-                            yield synth_finish("stop")
+                            emitted_finish = True
+                        if not emitted_finish:
+                            yield synth_finish("tool_calls" if saw_tool else "stop")
+                            emitted_finish = True
                         yield b"data: [DONE]\n\n"
                     if stream_error is not None:
                         log.warning("upstream stream ended early: %r", stream_error)
