@@ -53,7 +53,7 @@ OLLAMA_PORT=11434
 PROXY_PORT=18083
 HOST="127.0.0.1"
 CTX_SIZE=65536
-KEEP_ALIVE="30m"
+KEEP_ALIVE="-1"
 DO_WARM=true
 TEMP="0.6"
 TOP_P="0.95"
@@ -324,7 +324,7 @@ warm_model() {
     [[ "$DO_WARM" == true ]] || return 0
     echo "→ Pre-loading '${MODEL_ID}' (keep-alive ${KEEP_ALIVE})..."
     if curl -sf -m 300 "http://127.0.0.1:${OLLAMA_PORT}/api/generate" \
-        -d "{\"model\":\"${MODEL_ID}\",\"keep_alive\":\"${KEEP_ALIVE}\"}" >/dev/null; then
+        -d "{\"model\":\"${MODEL_ID}\",\"keep_alive\":${KEEP_ALIVE}}" >/dev/null; then
         echo "→ Model loaded"
     else
         echo "→ WARNING: pre-load failed (model will load on first request)"
