@@ -428,8 +428,8 @@
           "name": "GLM-4.7-Flash Heretic Q8_0 \u2014 uncensored max quality (~32 GB)",
           "tool_call": true,
           "limit": {
-            "context": 131072,
-            "output": 65536
+            "context": 32768,
+            "output": 8192
           }
         }
       }
