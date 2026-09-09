@@ -34,7 +34,7 @@
 #   start             Start proxy in background (default)
 #   foreground        Run proxy in foreground (Ctrl+C to stop)
 #   status            Show proxy + Ollama health
-#   stop              Stop harness proxy
+#   stop              Stop harness proxy and unload this model
 #   restart           Stop proxy, then start again in background
 #   --help, -h        Show this help
 # =============================================================================
@@ -97,7 +97,8 @@ done
 stop_server_on_port() {
     local port="$1"
     local pids
-    pids="$(lsof -ti ":${port}" 2>/dev/null || true)"
+    # Listeners only — `lsof -ti :PORT` also matches clients connected to the port.
+    pids="$(lsof -nP -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
     if [ -z "$pids" ]; then
         return 0
     fi
@@ -105,7 +106,7 @@ stop_server_on_port() {
     # shellcheck disable=SC2086
     kill -TERM $pids 2>/dev/null || true
     sleep 2
-    pids="$(lsof -ti ":${port}" 2>/dev/null || true)"
+    pids="$(lsof -nP -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
     if [ -n "$pids" ]; then
         # shellcheck disable=SC2086
         kill -KILL $pids 2>/dev/null || true
@@ -121,7 +122,7 @@ proxy_pid() {
             return 0
         fi
     fi
-    lsof -ti ":${PROXY_PORT}" 2>/dev/null | head -1 || true
+    lsof -nP -tiTCP:"${PROXY_PORT}" -sTCP:LISTEN 2>/dev/null | head -1 || true
 }
 
 proxy_healthy() {
@@ -208,15 +209,48 @@ if [[ "$DO_STATUS" == true ]]; then
     exit 0
 fi
 
+unload_this_model() {
+    if ! ollama_api_ok; then
+        echo "→ Ollama not responding on :${OLLAMA_PORT} (nothing to unload)"
+        return 0
+    fi
+    local host="127.0.0.1:${OLLAMA_PORT}"
+    local names name base unloaded=false
+    names="$(OLLAMA_HOST="$host" ollama ps 2>/dev/null | awk 'NR>1 {print $1}' || true)"
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        base="${name%%:*}"
+        if [[ "$base" == "$MODEL_ID" || "$base" == glm-4.7-flash-heretic-* ]]; then
+            echo "→ Unloading ${name}..."
+            OLLAMA_HOST="$host" ollama stop "$name" >/dev/null || true
+            local waits=0
+            while OLLAMA_HOST="$host" ollama ps 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$name"; do
+                waits=$((waits + 1))
+                if [[ $waits -ge 15 ]]; then
+                    echo "→ WARNING: ${name} still listed after 15s (Ollama reports Stopping…)"
+                    break
+                fi
+                sleep 1
+            done
+            unloaded=true
+        fi
+    done <<< "$names"
+    if [[ "$unloaded" == true ]]; then
+        echo "→ Model unloaded (Ollama daemon on :${OLLAMA_PORT} left running)"
+    else
+        echo "→ ${MODEL_ID} was not loaded (Ollama daemon on :${OLLAMA_PORT} left running)"
+    fi
+}
+
 if [[ "$DO_STOP" == true ]]; then
-    if lsof -ti ":${PROXY_PORT}" >/dev/null 2>&1; then
+    if lsof -nP -tiTCP:"${PROXY_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
         stop_server_on_port "$PROXY_PORT"
         echo "→ Harness proxy stopped (port ${PROXY_PORT})"
     else
         echo "→ No harness proxy running on port ${PROXY_PORT}"
     fi
     clear_proxy_state
-    echo "→ Ollama daemon on :${OLLAMA_PORT} left running (use 'ollama stop' per model if needed)"
+    unload_this_model
     exit 0
 fi
 
@@ -264,7 +298,7 @@ echo ""
 
 if [[ "$USE_PROXY" == true ]]; then
     if [[ "$DO_RESTART" == true ]]; then
-        if lsof -ti ":${PROXY_PORT}" >/dev/null 2>&1; then
+        if lsof -nP -tiTCP:"${PROXY_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
             echo "→ Stopping existing harness proxy on :${PROXY_PORT}..."
             stop_server_on_port "$PROXY_PORT"
             clear_proxy_state
@@ -274,7 +308,7 @@ if [[ "$USE_PROXY" == true ]]; then
         echo "→ API:       http://127.0.0.1:${PROXY_PORT}/v1"
         echo "→ Use './2_start_ollama.sh restart' to replace it"
         exit 0
-    elif lsof -ti ":${PROXY_PORT}" >/dev/null 2>&1; then
+    elif lsof -nP -tiTCP:"${PROXY_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
         echo "→ Stale process on :${PROXY_PORT} (not healthy) — stopping..."
         stop_server_on_port "$PROXY_PORT"
         clear_proxy_state
@@ -288,8 +322,9 @@ if [[ "$WEIGHTS_OK" != true ]] && ! ollama show "${MODEL_ID}" >/dev/null 2>&1; t
     exit 1
 fi
 
-# Modelfile: FROM local GGUF + sampling. GLM works best with a clear system style
-# but we leave system prompt to the client.
+# Modelfile: FROM local GGUF + sampling. Do not ship TEMPLATE — the GGUF uses
+# Jinja (`{% for tool in tools %}`) and Ollama Modelfile templates are Go
+# text/template, so copying it in fails with `function "tool" not defined`.
 DESIRED_MODELFILE="$(cat <<EOF
 FROM ${MODEL_PATH}
 PARAMETER num_ctx ${CTX_SIZE}

@@ -37,8 +37,8 @@ brew install ollama
 `num_ctx` defaults to **65536**, below the model's 131072 max. Decode speed on
 this stack collapses at high context (~78 tok/s near-empty vs ~8 tok/s at ~73k,
 and prompt prefill of an 80k input can take 15+ minutes), so sessions are capped
-to stay responsive. Kilo's `limit.context` (65536) and `limit.output` (8192) in
-`kilo.json` are set to match — **keep `limit.context` ≤ `num_ctx`**, or Ollama
+to stay responsive. Kilo's `limit.context` (32768) and `limit.output` (8192) in
+`kilo.json` are set at or below that — **keep `limit.context` ≤ `num_ctx`**, or Ollama
 silently truncates the prompt (dropping the oldest tokens, including the system
 prompt). Raise all three together only if you accept the slowdown:
 
@@ -74,8 +74,20 @@ Three defences, all in this repo:
    `--heartbeat 0` to disable.
 2. **`chunkTimeout` 900000** in `kilo.json`, matching the overall `timeout`, so
    a genuinely stalled generation still ends rather than hanging forever.
-3. **`limit.output` 32768** in `kilo.json`, capping how large a single buffered
+3. **`limit.output` 8192** in `kilo.json`, capping how large a single buffered
    tool call can grow.
+
+### Harness hang (thinking burns `max_tokens`)
+
+Ollama's OpenAI `/v1/chat/completions` **ignores** `think` / `enable_thinking`
+(verified on 0.31.1). GLM's GGUF template then always opens `<think>`. Native
+`/api/chat` honors `think=false` but **rejects Kilo's content-part arrays**
+(`cannot unmarshal array into … messages.content`), so prompts never send.
+
+This stack therefore leaves Kilo on OpenAI `/v1` (content-part arrays work).
+`--native-chat` is opt-in only, for clients that send string `content`.
+Do not copy the GGUF Jinja chat template into an Ollama Modelfile — Ollama
+uses Go templates and `ollama create` fails with `function "tool" not defined`.
 
 ### Reasoning-only turns ("...ended the response before returning usable output")
 
@@ -125,6 +137,9 @@ Expect `ok: true` and `glm-4.7-flash-heretic-q8` listed.
 ./2_start_ollama.sh stop
 ```
 
+Stops the harness proxy and unloads this stack's model from GPU/RAM.
+The shared Ollama daemon on `:11434` is left running (other models may use it).
+
 ## Quants
 
 | Quant | Size | Command |
@@ -143,7 +158,15 @@ prompts (build/plan/explore/debug/code, `steps` caps). The shared
 "Conclude decisively" block is managed by `../../sync_agent_prompts.py`; do
 not hand-edit it. Merge into `~/.config/kilo/kilo.jsonc` and reload.
 
-**OpenCode** — point a provider at `http://127.0.0.1:18083/v1` with model id `glm-4.7-flash-heretic-q8`.
+**OpenCode** — merge the local provider into `~/.config/opencode/opencode.json`
+(keeps your other providers; sets the default model to GLM):
+
+```bash
+./install-opencode-json.sh --force
+```
+
+Provider `glm`, model `glm/glm-4.7-flash-heretic-q8`, API `http://127.0.0.1:18083/v1`.
+Start the stack (`./2_start_ollama.sh`) before chatting.
 
 ## Useful flags
 
