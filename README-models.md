@@ -21,6 +21,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | **Gemma 4 31B AtomicChat** | `censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/` | **Text only** | Language quant + chat template; not a vision package |
 | **DiffusionGemma 26B** | `censored/diffusiongemma4-26b-a4b-mlx/` | **Text + image** | Discrete diffusion VLM; research / image Q&A |
 | **Ornith 1.0 35B** | `censored/ornith-1.0-35b-q8-gguf-ollama/` | **Text only** | Ollama GGUF |
+| **YuE2-3B MLX** | `censored/yue2-3b-mlx/` | **Text → audio** | Lyrics/style → 48 kHz song; not a chat/coding model |
 | **Gemma 4 31B Heretic** | `uncensored/gemma4-server-heretic-31b-mlx/` | **Text + image** | Language is Heretic; vision **grafted** from stock IT (or text-only with `--skip-vision`) |
 | **Gemma 4 31B JANG CRACK** | `uncensored/gemma4-jang-crack-31b-mlx/` | **Text + image** | Vision **native** in checkpoint (no graft step) |
 | **Qwen3-32B Heretic** | `uncensored/archived/qwen3-32b-heretic-mlx/` | **Text only** | Dense Qwen3, not 3.6 (archived) |
@@ -38,6 +39,8 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | `z-lab/Qwen3.5-122B-A10B-DFlash` | **Text draft only** | DFlash block-diffusion draft; not standalone chat |
 | `mlx-community/Muse-Glimmer-30B-4bit` | **Text + image** | Default Muse Glimmer MLX quant (~19.4 GB) |
 | `meta-models/Muse-Glimmer-30B-assistant` | **Text draft only** | Official DFlash drafter (~5 GB); not a chat model |
+| `m-a-p/YuE2-3B` | **Text → audio** | YuE2 generator; converted by `lyra prepare` |
+| `m-a-p/YuE2-Vae` | **Audio decoder** | Default listening VAE (not YuE2-Vae-legacy) |
 
 ### Pick by modality
 
@@ -47,6 +50,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | Images in Kilo (attach / paste) | **Muse Glimmer** (aligned), **Heretic** (grafted), **JANG CRACK** (native), or **DiffusionGemma** (vision-first research) |
 | Aligned Gemma text only | **AtomicChat** — do not expect image understanding |
 | Vision weights for grafting | `mlx-community/gemma-4-31b-it-4bit`, not AtomicChat |
+| Local songs from lyrics / style | **YuE2-3B MLX** (`:8088`) |
 
 Kilo image attach needs a **vision** stack + its server running. See [README.md](README.md) (Image attach) and [DiffusionGemma README](censored/diffusiongemma4-26b-a4b-mlx/README-diffusiongemma4.md).
 
@@ -67,6 +71,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 | Uncensored MoE coding (lighter) | **GLM-4.7 Flash Heretic** (`:18083`) | Vision; max coding quality vs DeepSeek |
 | Multimodal / diffusion research | **DiffusionGemma** (`:8080`) | Agentic coding as primary job |
 | Guided agent experiments | **Ornith** (`:18082`) | Fast iteration; unattended large tasks |
+| Local music generation | 🟡 **YuE2-3B MLX** (`:8088`) | Kilo coding; NVIDIA CUDA `yue2-infer`; commercial (CC BY-NC) |
 | Aligned stock Gemma | **Gemma 4 31B IT** (`:8080`) | Heavy uncensored needs |
 
 **Don’t load two huge models at once on 128 GB** (DeepSeek + Qwen3.5-122B, two DeepSeeks, etc.). Port `8080` is shared among Gemma/Diffusion stacks — one at a time.
@@ -241,6 +246,33 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 
 ---
 
+### YuE2-3B — MLX (`censored/yue2-3b-mlx/`)
+
+| | |
+|--|--|
+| **Role** | 🟡 **Music generation** — lyrics/style → 48 kHz stereo song |
+| **Modality** | **Text in, audio out** (not a chat or coding model) |
+| **Engine / size** | [yue2-mlx](https://github.com/daig/yue2-mlx) `lyra` · ~7.8 GB download, ~15 GB after BF16 convert; ~12.6 GiB peak on 32 GB M5 Air |
+| **HF** | `m-a-p/YuE2-3B` + listening decoder `m-a-p/YuE2-Vae` |
+| **API** | `:8088` · `POST /generate` (not `/v1/chat/completions`) |
+| **Harness** | `test_harness.py` (`--offline`; `--gate` after `./2_start_server.sh`) |
+| **License** | Weights **CC BY-NC 4.0** |
+
+**Good for**
+
+- Local songs from a style prompt and section-tagged lyrics
+- Editable ABC plans (`cot=full` / `melody`) then regenerate
+- A short ~16s install clip (`examples/quickstart.json`)
+
+**Not good for**
+
+- Kilo tool loops or any OpenAI chat-completions client
+- NVIDIA-only official `yue2-infer` (do not mix venvs)
+- Commercial shipping (non-commercial weights)
+- Co-loading another 20+ GB model on a 32 GB machine
+
+---
+
 ### Ornith 1.0 35B (`censored/ornith-1.0-35b-q8-gguf-ollama/`)
 
 | | |
@@ -300,6 +332,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 | **Modality** | **Text + image** (after graft; text-only if `--skip-vision`) |
 | **Engine / size** | vllm-mlx + Kilo proxy · ~20 GB |
 | **API** | `:8080/v1` · Kilo: `openai-compatible/gemma-4-31b-heretic-mlx-4bit` |
+| **Harness** | `test_harness.py` (`--gate` on post-start; `--no-harness-gate` to skip) |
 
 **Good for**
 

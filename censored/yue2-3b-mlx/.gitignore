@@ -1,0 +1,11 @@
+engine/
+models/
+outputs/
+.yue2_config
+*.resources.json
+*.resources.jsonl
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store

@@ -20,6 +20,7 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` | 🟢 Stock Gemma 4 31B IT (AtomicChat 2026-07-15) | Text | `:8080/v1` |
 | [`censored/diffusiongemma4-26b-a4b-mlx/`](censored/diffusiongemma4-26b-a4b-mlx/) | `diffusiongemma/diffusiongemma-26b-a4b-it-bf16` | 🟢 Multimodal / research | **Text + image** | `:8080/v1` |
 | [`censored/ornith-1.0-35b-q8-gguf-ollama/`](censored/ornith-1.0-35b-q8-gguf-ollama/) | `ornith/ornith-1.0-35b-q8` | 🟢 Guided agent trials | Text | `:18082/v1` |
+| [`censored/yue2-3b-mlx/`](censored/yue2-3b-mlx/) | `yue2-3b-mlx` (not a Kilo chat model) | 🟡 **YuE2-3B** music generation (lyra / yue2-mlx) | **Text → audio** | `:8088` |
 
 ### Uncensored
 
@@ -33,7 +34,7 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/) | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` | 📦 Archived DFlash (weights removed) | Text | `:8086/v1` |
 | [`uncensored/glm-4.7-flash-heretic-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-gguf-ollama/) | `glm/glm-4.7-flash-heretic-q8` | 🟢 Uncensored MoE (Ollama) | Text | `:18083/v1` |
 
-**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Muse Glimmer (`8087`), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Qwen 3.8 OBLITERATED mtplx (`8768` proxy / `8767` engine), Ornith 1.0 (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB.
+**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Muse Glimmer (`8087`), YuE2 (`8088`), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Qwen 3.8 OBLITERATED mtplx (`8768` proxy / `8767` engine), Ornith 1.0 (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB. YuE2 is a song generator (`POST /generate`), not a Kilo chat-completions provider.
 
 ---
 
@@ -73,6 +74,7 @@ Other stacks: `1_*` setup/download → `2_*` start → select the model ID for t
 | Diffusion / vision experiments | 🟢 **DiffusionGemma** | Coding or reliable tool use |
 | Local multimodal agents (tools + images, 4-bit ~20 GB) | 🟢 **Muse Glimmer 30B** | Snappy Qwen-style loops; thinking cannot be switched off |
 | Guided Ollama agent trials | 🟢 **Ornith** | Fast iteration; unattended large tasks |
+| Local songs from lyrics / style | 🟡 **YuE2-3B MLX** (`:8088`) | Kilo tool loops; NVIDIA `yue2-infer`; commercial use (CC BY-NC) |
 | Uncensored large MoE (Qwen3.5 122B abliterated) | 🟢 **Qwen3.5-122B-A10B Abliterated** | RAM ≪ 128 GB; prefer Qwen3.6 27B mtplx for snappy coding |
 
 ### Uncensored
@@ -140,6 +142,7 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 - [deepseek-v4-flash-2bit-dq-mlx/README.md](censored/deepseek-v4-flash-2bit-dq-mlx/README.md) — V4 Flash / community mlx-lm  
 - [diffusiongemma4 README](censored/diffusiongemma4-26b-a4b-mlx/README-diffusiongemma4.md) · [ornith README](censored/ornith-1.0-35b-q8-gguf-ollama/README.md)  
 - [gemma4 stock IT AtomicChat 2026-07-15](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/README.md)  
+- [YuE2-3B MLX](censored/yue2-3b-mlx/README.md) — lyrics/style → 48 kHz song (`lyra` / yue2-mlx; not a Kilo chat model)  
 
 
 **Uncensored**
