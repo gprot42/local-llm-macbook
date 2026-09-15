@@ -14,7 +14,8 @@ Kilo compaction
 
 MLX / Heretic reliability (kept from the old 10k-line proxy)
   • Harmony token logit_bias (ids 98/100/101) on agentic turns
-  • Agentic temperature floor 0.35; thinking disabled
+  • Thinking disabled on every turn (empty content breaks Kilo)
+  • Agentic temperature floor 0.35; Harmony logit_bias when tools are present
   • Empty-delta abort when vllm-mlx spins empty SSE chunks
   • Token-stall abort with graceful finish_reason=stop (no Kilo retry storm)
   • Tool-args size cap (repetition loops)
@@ -91,6 +92,14 @@ _DEFAULT_TODO_INFO: dict[str, Any] = {
 _KEEPALIVE_INTERVAL_S = 15.0
 _KEEPALIVE_LINE = b": keepalive\n\n"
 
+# Gemma 4's end-of-turn token. It is in the model's eos_token_id list, but the
+# vllm-mlx path serving this model does not stop on it: the text "<turn|>" is
+# emitted as content and generation then runs on into repetition garbage
+# ("s-1-1-1-…") until max_tokens. Sending it as a stop sequence ends the turn
+# cleanly. vllm-mlx does not strip matched stop text, so the proxy also strips
+# it from content deltas.
+_TURN_STOP = "<turn|>"
+
 _FUZZY_THRESHOLD = 0.85
 _FUZZY_THRESHOLD_DELETE = 0.80
 _FUZZY_WINDOW_SLACK = 4
@@ -121,6 +130,26 @@ _EMPTY_DELTA_STREAK = 100
 _STALL_ABORT_S = 90.0
 _STALL_ABORT_AGENTIC_S = 45.0
 _ARGS_CAP_CHARS = 8192
+
+# Text-collapse loop guard. With thinking forced off, Gemma sometimes narrates a
+# plan ("<details>…</details> Actually, I'll just use `glob`…") instead of
+# emitting the tool call, then repeats that block until max_tokens or a user
+# abort (observed: a 5-line block x58 over 4 minutes). Nothing else bounds plain
+# text, so end the turn gracefully once a substantive block repeats back-to-back.
+_REPEAT_MIN_COPIES = 3          # multi-line blocks
+_REPEAT_MIN_COPIES_SINGLE = 5   # a lone line must repeat more (code repeats "}" etc.)
+_REPEAT_MAX_BLOCK_LINES = 12
+_REPEAT_MIN_BLOCK_CHARS = 40
+_REPEAT_TAIL_LINES = 80
+
+# Wall-clock turn ceilings — independent of saw_useful, unlike the stall/empty
+# guards. A turn that never emits a content or tool delta (only reasoning_content
+# that gets stripped, whitespace, or a slow non-repeating ramble) keeps
+# last_token_t fresh and never trips the stall guard, so without these it runs to
+# max_tokens or the 900s httpx timeout — a hung OpenCode/Kilo turn.
+_NO_OUTPUT_MAX_S = 150.0       # no content/tool delta at all → stuck (allows big-context prefill)
+_TURN_MAX_AGENTIC_S = 180.0    # hard ceiling for tool-using turns
+_TURN_MAX_S = 300.0            # hard ceiling for plain chat
 
 _HALLUCINATED_WRITE_NAMES = frozenset({
     "write",  # Gemma native short name (Kilo expects Write)
@@ -200,6 +229,29 @@ _COMPACTION_NUDGE = (
     "\n\nRespond with plain text only. Do not call tools or emit tool_calls."
 )
 
+# Keep compaction summaries short — long Goal/Progress dumps re-inflate context.
+_COMPACTION_MAX_TOKENS = 1024
+_COMPACTION_MAX_TOKENS_CEILING = 2048
+
+# Gemma 4 native tool markup that leaked as chat text (parser miss / broken emit).
+# Includes the common broken forms `<tool_call|>` and `<|"|>` as well as
+# well-formed `<|tool_call>call:read{...}` that the gemma4 parser should have
+# turned into OpenAI tool_calls.
+_NATIVE_TOOL_LEAK_RE = re.compile(
+    r"<\|tool_call\b"
+    r"|<tool_call\|>"
+    r"|<\|\"\|>"
+    r"|call:(?:read|write|bash|glob|grep|todo_write|todowrite|str_replace)\s*\{",
+    re.I,
+)
+
+
+def content_leaks_native_tools(text: str) -> bool:
+    """True when assistant content still contains Gemma native tool markup."""
+    if not text:
+        return False
+    return bool(_NATIVE_TOOL_LEAK_RE.search(text))
+
 
 def _tool_choice_disallows_tools(tool_choice: Any) -> bool:
     if tool_choice == "none":
@@ -207,44 +259,67 @@ def _tool_choice_disallows_tools(tool_choice: Any) -> bool:
     return isinstance(tool_choice, dict) and tool_choice.get("type") == "none"
 
 
-def _message_blob(messages: list[dict] | None) -> str:
-    if not messages:
-        return ""
-    return "\n".join(_get_message_text(msg) for msg in messages)
+def _has_tools(body: dict) -> bool:
+    tools = body.get("tools")
+    return isinstance(tools, list) and len(tools) > 0
 
 
-def _compaction_probe_blob(messages: list[dict] | None) -> str:
-    """System + latest user only (full history false-positives on 'summarize')."""
+def _latest_user_text(messages: list[dict] | None) -> str:
     if not messages:
         return ""
-    parts: list[str] = []
-    for msg in messages:
-        if msg.get("role") == "system":
-            text = _get_message_text(msg)
-            if text:
-                parts.append(text)
     for msg in reversed(messages):
-        if msg.get("role") == "user":
-            text = _get_message_text(msg)
-            if text:
-                parts.append(text)
-            break
-    return "\n".join(parts)
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            return _get_message_text(msg)
+    return ""
 
 
 def _is_compaction_request(body: dict) -> bool:
-    if _tool_choice_disallows_tools(body.get("tool_choice")):
+    """Detect Kilo session-compaction turns — must NOT false-positive agent turns.
+
+    Scanning the system prompt matched Kilo harness lines such as
+    "Do not re-summarize the conversation history" / "Preserve key information",
+    which stripped tools on every agent request.
+
+    Rules:
+      1. Tools present and tool_choice is not none → agentic, never compact.
+      2. tool_choice=none is compaction / text-only.
+      3. Otherwise only the latest user message is inspected for summary wording.
+    """
+    choice_none = _tool_choice_disallows_tools(body.get("tool_choice"))
+    if _has_tools(body) and not choice_none:
+        return False
+    if choice_none:
         return True
-    blob = _compaction_probe_blob(body.get("messages"))
+    blob = _latest_user_text(body.get("messages"))
     return bool(blob) and any(pattern.search(blob) for pattern in _COMPACTION_HINTS)
+
+
+def _cap_compaction_tokens(body: dict) -> None:
+    raw = body.get("max_tokens")
+    if raw is None:
+        raw = body.get("max_completion_tokens")
+    try:
+        value = int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        value = 0
+    if value <= 0 or value > _COMPACTION_MAX_TOKENS_CEILING:
+        body["max_tokens"] = _COMPACTION_MAX_TOKENS
+        log.info("[compaction] max_tokens → %d", _COMPACTION_MAX_TOKENS)
+    elif value > _COMPACTION_MAX_TOKENS:
+        body["max_tokens"] = _COMPACTION_MAX_TOKENS
+        log.info("[compaction] max_tokens %d → %d", value, _COMPACTION_MAX_TOKENS)
 
 
 def _prepare_compaction_request(body: dict) -> None:
     body.pop("tools", None)
     body["tool_choice"] = "none"
+    _cap_compaction_tokens(body)
     messages = body.get("messages")
     if not isinstance(messages, list) or not messages:
         return
+    flattened = _flatten_tool_calls_in_history(messages)
+    if flattened:
+        log.info("[compaction] flattened tool_calls on %d message(s)", flattened)
     for msg in messages:
         if msg.get("role") != "system":
             continue
@@ -289,6 +364,16 @@ def _flatten_tool_calls_in_message(msg: dict) -> None:
     content = msg.get("content") or ""
     if extra:
         msg["content"] = f"{content}\n\n{extra}".strip() if content else extra
+
+
+def _flatten_tool_calls_in_history(messages: list[dict]) -> int:
+    """On compaction, drop residual tool_calls so the model can't re-issue them."""
+    n = 0
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("tool_calls"):
+            _flatten_tool_calls_in_message(msg)
+            n += 1
+    return n
 
 
 def _flatten_tool_calls_in_response(data: dict) -> None:
@@ -1154,14 +1239,96 @@ def _emit_repaired_stream(
     ]
 
 
-def _graceful_stop_chunk(response_id: str, model_name: str) -> list[bytes]:
+def _turn_ceiling_reason(elapsed: float, saw_useful: bool, is_agentic: bool) -> str | None:
+    """Wall-clock guard, independent of token progress / saw_useful.
+
+    Returns "hard" past the absolute turn ceiling, "no-output" when nothing
+    useful has streamed within _NO_OUTPUT_MAX_S, else None.
+    """
+    hard = _TURN_MAX_AGENTIC_S if is_agentic else _TURN_MAX_S
+    if elapsed > hard:
+        return "hard"
+    if not saw_useful and elapsed > _NO_OUTPUT_MAX_S:
+        return "no-output"
+    return None
+
+
+def _text_repeats(lines: list[str]) -> tuple[int, int] | None:
+    """Detect a text-collapse loop in streamed content.
+
+    Looks at the trailing non-empty lines for a block of 1.._REPEAT_MAX_BLOCK_LINES
+    lines that repeats consecutively. Returns (block_lines, copies) when a
+    substantive block (>= _REPEAT_MIN_BLOCK_CHARS) repeats at least
+    _REPEAT_MIN_COPIES times (_REPEAT_MIN_COPIES_SINGLE for a one-line block),
+    else None. Cheap: at most ~12 slice comparisons over the last 80 lines.
+    """
+    tail = [l.strip() for l in lines if l.strip()][-_REPEAT_TAIL_LINES:]
+    n = len(tail)
+    for size in range(1, _REPEAT_MAX_BLOCK_LINES + 1):
+        need = _REPEAT_MIN_COPIES_SINGLE if size == 1 else _REPEAT_MIN_COPIES
+        if n < size * need:
+            continue
+        block = tail[-size:]
+        if sum(len(l) for l in block) < _REPEAT_MIN_BLOCK_CHARS:
+            continue
+        copies = 0
+        i = n
+        while i - size >= 0 and tail[i - size:i] == block:
+            copies += 1
+            i -= size
+        if copies >= need:
+            return size, copies
+    return None
+
+
+def _collapse_repeats(text: str) -> str:
+    """Collapse consecutive repeated line-blocks to a single copy.
+
+    Used only on recovered reasoning (an indecisive monologue this model tends to
+    loop: "Actually, I'll X. Actually, I'll Y. I'll just do it. Actually, I'll X.
+    …"). Largest block size first, iterated to a fixed point. Not used on normal
+    content, so collapsing adjacent duplicate lines here is intentional.
+    """
+    lines = text.split("\n")
+    changed = True
+    while changed:
+        changed = False
+        i = 0
+        out: list[str] = []
+        while i < len(lines):
+            collapsed = False
+            # Largest block first so a multi-line cycle wins over its sub-lines.
+            max_size = min(_REPEAT_MAX_BLOCK_LINES, (len(lines) - i) // 2)
+            for size in range(max_size, 0, -1):
+                block = lines[i:i + size]
+                if lines[i + size:i + 2 * size] == block:
+                    copies = 2
+                    j = i + 2 * size
+                    while lines[j:j + size] == block:
+                        copies += 1
+                        j += size
+                    out.extend(block)
+                    i = j
+                    collapsed = True
+                    changed = True
+                    break
+            if not collapsed:
+                out.append(lines[i])
+                i += 1
+        lines = out
+    return "\n".join(lines)
+
+
+def _graceful_stop_chunk(
+    response_id: str, model_name: str, reason: str = "stop",
+) -> list[bytes]:
     """Normal completion end so Kilo does not retry (errors re-queue ghosts)."""
     return [
         _encode_sse_event({
             "id": response_id or f"chatcmpl-{uuid.uuid4().hex[:12]}",
             "object": "chat.completion.chunk",
             "model": model_name,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": reason}],
         }),
         b"data: [DONE]\n\n",
     ]
@@ -1244,19 +1411,59 @@ def _strip_planning_tools_if_stuck(body: dict) -> None:
         log.info("[strip-planning] removed %s (no write yet)", removed)
 
 
-def _force_agentic_settings(body: dict) -> None:
-    """Temperature floor, thinking off, Harmony logit bias for tool-using turns."""
-    if not body.get("tools"):
-        return
-    old_temp = float(body.get("temperature") or 0)
-    body["temperature"] = min(max(old_temp, _AGENT_TEMP_MIN), _AGENT_TEMP_MAX)
-    body.setdefault("top_p", 0.95)
+def _add_turn_stop(body: dict) -> None:
+    """Ensure Gemma's end-of-turn token is a stop sequence on every turn."""
+    stop = body.get("stop")
+    if isinstance(stop, str):
+        body["stop"] = [stop] if stop == _TURN_STOP else [stop, _TURN_STOP]
+    elif isinstance(stop, list):
+        if _TURN_STOP not in stop:
+            body["stop"] = [*stop, _TURN_STOP]
+    else:
+        body["stop"] = [_TURN_STOP]
+
+
+def _strip_turn_stop(ev: dict) -> None:
+    """Remove leaked end-of-turn text from content deltas (vllm-mlx keeps it)."""
+    for choice in ev.get("choices", []):
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            content = delta.get("content")
+            if isinstance(content, str) and _TURN_STOP in content:
+                delta["content"] = content.replace(_TURN_STOP, "")
+
+
+def _strip_turn_stop_response(data: dict) -> None:
+    """Non-streaming twin of _strip_turn_stop: clean message.content."""
+    for choice in data.get("choices", []):
+        msg = choice.get("message")
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, str) and _TURN_STOP in content:
+                msg["content"] = content.replace(_TURN_STOP, "")
+
+
+def _disable_thinking(body: dict) -> None:
+    """Always off for Kilo — thought-only turns leave content empty and break the loop."""
     body["enable_thinking"] = False
     ctk = body.get("chat_template_kwargs")
     if not isinstance(ctk, dict):
         ctk = {}
     ctk["enable_thinking"] = False
     body["chat_template_kwargs"] = ctk
+    thinking = body.get("thinking")
+    if isinstance(thinking, dict):
+        thinking["type"] = "disabled"
+
+
+def _force_agentic_settings(body: dict) -> None:
+    """Temperature floor, thinking off, Harmony logit bias for tool-using turns."""
+    _disable_thinking(body)
+    if not body.get("tools"):
+        return
+    old_temp = float(body.get("temperature") or 0)
+    body["temperature"] = min(max(old_temp, _AGENT_TEMP_MIN), _AGENT_TEMP_MAX)
+    body.setdefault("top_p", 0.95)
 
     bias = dict(_HARMONY_LOGIT_BIAS)
     existing = body.get("logit_bias")
@@ -1361,6 +1568,8 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
             body["messages"] = _truncate_tool_results(messages)
             messages = body["messages"]
 
+        _disable_thinking(body)
+        _add_turn_stop(body)
         compaction = _is_compaction_request(body)
         if compaction:
             _prepare_compaction_request(body)
@@ -1405,6 +1614,7 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
                             writers,
                             messages,
                         )
+            _strip_turn_stop_response(data)
             return JSONResponse(data)
 
         async def stream_gen():
@@ -1420,9 +1630,14 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
             response_id = ""
             model_name = ""
             empty_streak = 0
+            turn_start = time.monotonic()
             last_token_t = time.monotonic()
             last_tokens: int | None = None
             saw_useful = False
+            saw_tool_delta = False
+            emitted_finish = False
+            content_text = ""
+            reasoning_text = ""
             args_chars = 0
             aborted = False
             stall_limit = _STALL_ABORT_AGENTIC_S if is_agentic else _STALL_ABORT_S
@@ -1470,9 +1685,36 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
                                 yield chunk
                             aborted = True
                             break
+                        ceil = _turn_ceiling_reason(
+                            time.monotonic() - turn_start, saw_useful, is_agentic
+                        )
+                        if ceil:
+                            log.warning(
+                                "[turn-ceiling:%s] %.0fs elapsed, saw_useful=%s — graceful stop",
+                                ceil, time.monotonic() - turn_start, saw_useful,
+                            )
+                            for chunk in _graceful_stop_chunk(
+                                response_id, model_name,
+                                "tool_calls" if saw_tool_delta else "stop",
+                            ):
+                                yield chunk
+                            aborted = True
+                            break
                         yield _KEEPALIVE_LINE
                         continue
                     except StopAsyncIteration:
+                        break
+                    except (httpx.HTTPError, OSError) as exc:
+                        # Upstream dropped mid-stream. End the client stream
+                        # gracefully (finish + [DONE]) rather than breaking it,
+                        # which Kilo renders as an error and retries.
+                        log.warning("[upstream-drop] %r — graceful end", exc)
+                        for chunk in _graceful_stop_chunk(
+                            response_id, model_name,
+                            "tool_calls" if saw_tool_delta else "stop",
+                        ):
+                            yield chunk
+                        aborted = True
                         break
 
                     if not line.startswith("data:"):
@@ -1487,6 +1729,8 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
 
                     response_id = response_id or ev.get("id", "")
                     model_name = model_name or ev.get("model", "")
+                    if any(c.get("finish_reason") for c in ev.get("choices", [])):
+                        emitted_finish = True
 
                     # Track completion tokens for stall / empty-delta guards.
                     tokens = _completion_tokens(ev)
@@ -1520,6 +1764,22 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
                         aborted = True
                         break
 
+                    ceil = _turn_ceiling_reason(
+                        time.monotonic() - turn_start, saw_useful, is_agentic
+                    )
+                    if ceil:
+                        log.warning(
+                            "[turn-ceiling:%s] %.0fs elapsed, saw_useful=%s — graceful stop",
+                            ceil, time.monotonic() - turn_start, saw_useful,
+                        )
+                        for chunk in _graceful_stop_chunk(
+                            response_id, model_name,
+                            "tool_calls" if saw_tool_delta else "stop",
+                        ):
+                            yield chunk
+                        aborted = True
+                        break
+
                     # Drop reasoning_content on agentic turns — Kilo should only
                     # see tools/content. Server-side gemma4 reasoning parser puts
                     # <|channel>thought… into reasoning_content; without this
@@ -1528,6 +1788,7 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
                         for choice in ev.get("choices", []):
                             delta = choice.get("delta")
                             if isinstance(delta, dict) and delta.get("reasoning_content"):
+                                reasoning_text += delta["reasoning_content"]
                                 delta.pop("reasoning_content", None)
 
                     has_tool_delta = any(
@@ -1540,6 +1801,8 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
                     )
                     if has_tool_delta or has_content:
                         saw_useful = True
+                    if has_tool_delta:
+                        saw_tool_delta = True
 
                     if has_tool_delta:
                         for choice in ev.get("choices", []):
@@ -1597,7 +1860,26 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
                         pending_tool_lines.clear()
                         events.clear()
 
-                    yield _encode_sse_line(line, writers, remapped_sources)
+                    _strip_turn_stop(ev)
+                    if has_content:
+                        delta_text = "".join(
+                            (c.get("delta") or {}).get("content") or ""
+                            for c in ev.get("choices", [])
+                        )
+                        content_text += delta_text
+                        if "\n" in delta_text:
+                            rep = _text_repeats(content_text.splitlines())
+                            if rep:
+                                log.warning(
+                                    "[repeat-abort] %d-line block repeated %dx — graceful stop",
+                                    rep[0], rep[1],
+                                )
+                                for chunk in _graceful_stop_chunk(response_id, model_name):
+                                    yield chunk
+                                aborted = True
+                                break
+                    _patch_tool_call_event(ev, writers, remapped_sources)
+                    yield _encode_sse_event(ev)
 
                 if aborted:
                     return
@@ -1615,7 +1897,59 @@ def create_app(upstream: str, model_override: str | None = None) -> Any:
                 else:
                     for pending in pending_tool_lines:
                         yield _encode_sse_line(pending, writers, remapped_sources)
+                    if not saw_tool_delta and not content_text.strip():
+                        # Empty turn: no answer and no tool call reached the client
+                        # (the model produced only reasoning_content, which is
+                        # stripped on agentic turns, or whitespace / a bare
+                        # <turn|>). That renders as a blank turn in OpenCode/Kilo
+                        # and stalls the agent loop ("prompt stopped"). Surface the
+                        # reasoning as content so the user sees what the model
+                        # produced instead of nothing.
+                        recovered = _collapse_repeats(reasoning_text.strip())
+                        log.warning(
+                            "[empty-turn] nothing visible to client "
+                            "(content=%dc reasoning=%dc→%dc after collapse) — %s",
+                            len(content_text), len(reasoning_text), len(recovered),
+                            "recovering reasoning as content" if recovered
+                            else "nothing to recover",
+                        )
+                        if recovered:
+                            yield _encode_sse_event({
+                                "id": response_id or f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                                "object": "chat.completion.chunk",
+                                "model": model_name,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"role": "assistant", "content": recovered},
+                                    "finish_reason": None,
+                                }],
+                            })
+                    if not emitted_finish:
+                        # vllm-mlx ends tool turns (and stop-sequence ends) with
+                        # no finish_reason chunk. Kilo maps an absent finish to
+                        # "other" ("Response ended unexpectedly") and will not
+                        # reliably run the tool. Synthesize the right one.
+                        yield _encode_sse_event({
+                            "id": response_id or f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                            "object": "chat.completion.chunk",
+                            "model": model_name,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "tool_calls" if saw_tool_delta else "stop",
+                            }],
+                        })
                     yield b"data: [DONE]\n\n"
+            except (asyncio.CancelledError, GeneratorExit):
+                # The client (Kilo) went away mid-stream — Stop button or timeout.
+                # The finally closes the upstream response, which vllm-mlx honors
+                # by aborting generation. Logged so a Stop leaves hard proof.
+                log.warning(
+                    "[client-disconnect] stream cancelled mid-turn (useful=%s tool=%s) "
+                    "— closing upstream to abort generation",
+                    saw_useful, saw_tool_delta,
+                )
+                raise
             finally:
                 if resp is not None:
                     await resp.aclose()

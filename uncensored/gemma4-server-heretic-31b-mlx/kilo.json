@@ -46,7 +46,7 @@
   "provider": {
     "openai-compatible": {
       "options": {
-        "baseURL": "http://localhost:8080/v1"
+        "baseURL": "http://127.0.0.1:8080/v1"
       },
       "models": {
         "gemma-4-31b-heretic-mlx-4bit": {
@@ -58,7 +58,7 @@
             "output": ["text"]
           },
           "limit": {
-            "context": 32768,
+            "context": 49152,
             "output": 8192
           }
         }

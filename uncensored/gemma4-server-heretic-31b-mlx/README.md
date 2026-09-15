@@ -35,7 +35,7 @@ kilo
 
 `1_setup_download.sh` pulls `mlx-community/gemma-4-31B-it-uncensored-heretic-4bit` (language-only upstream), then auto-downloads stock vision from `mlx-community/gemma-4-31b-it-4bit` (multimodal quant; not the AtomicChat text stack) and runs `graft_vision_from_stock.sh`. Use `--skip-vision` for a text-only install. For aligned stock chat, see `../gemma4-server-atomicchat-mlx-31b-2026-07-15/`.
 
-The Kilo steering proxy is **on by default** (Harmony bias, temp floor, tool repair, stall guards). Public API stays `http://localhost:8080/v1`; vllm-mlx listens on `:8090`. For raw vllm-mlx only:
+The Kilo steering proxy is **on by default** (Harmony bias, temp floor, tool repair, stall guards). After the proxy is up, `./2_start_mlx.sh` runs **`test_harness.py --gate`** (unit tests + a few live chats) so compaction false-positives and leaked Gemma tool markup fail the start. Skip with `--no-harness-gate`. Public API stays `http://localhost:8080/v1`; vllm-mlx listens on `:8090`. For raw vllm-mlx only:
 
 ```bash
 ./2_start_mlx.sh --no-proxy
@@ -115,6 +115,7 @@ vllm-mlx is preferred over raw `mlx_vlm` for continuous batching, paged KV, and 
 | `apply_local_patches.sh` | Version-aware patch apply into the venv |
 | `check_upstream_patches.sh` | Verify upstream fixes + remaining local patches |
 | `validate_model.py` | Refuse to start if weight shards are incomplete |
+| `test_harness.py` | Proxy unit tests + live `--gate` (compaction bait, tool repair, native-markup leak) |
 
 ### Server options (`2_start_mlx.sh`)
 
@@ -124,6 +125,7 @@ vllm-mlx is preferred over raw `mlx_vlm` for continuous batching, paged KV, and 
 ./2_start_mlx.sh restart            # kill :8080/:8090, then start
 ./2_start_mlx.sh --batching         # multi-user (needs lots of RAM)
 ./2_start_mlx.sh --debug            # verbose proxy logs
+./2_start_mlx.sh --no-harness-gate  # skip post-start test_harness.py --gate
 ./2_start_mlx.sh --enable-metrics
 ./2_start_mlx.sh --enable-auto-tool-choice
 ./2_start_mlx.sh --help
@@ -135,12 +137,13 @@ vllm-mlx is preferred over raw `mlx_vlm` for continuous batching, paged KV, and 
 
 | File | Purpose |
 |------|---------|
-| `gemma4_mlx_kilo_proxy.py` | Default Kilo proxy: tool repair, fuzzy edit, Harmony bias, stall/empty-delta guards |
+| `gemma4_mlx_kilo_proxy.py` | Default Kilo proxy: tool repair, fuzzy edit, Harmony bias, stall/empty-delta guards, compaction bait guard |
+| `test_harness.py` | Standalone harness (`--unit-only`, `--gate`, live); default post-start gate |
 | `kilo.json` | Kilo Code provider config (31B Heretic, 32k context) |
 | `requirements.txt` | Python dependency ranges |
 | `DEVELOPER-bugs.md` | Known vllm-mlx / Gemma 4 issues and history |
 | `patches/` | Local fixes (mostly legacy for vllm-mlx 0.3.x; see below) |
-| `tests/` | Lean proxy pure-function suite (`./tests/run_tests.sh`) |
+| `tests/` | Lean proxy pure-function suite (`./tests/run_tests.sh`); `test_harness.py --unit-only` is also in `./tests/run_all_tests.sh` |
 
 ### Patches (vllm-mlx 0.4.0+)
 

@@ -14,6 +14,15 @@ REPORT="$REPORTS_DIR/test_report_${TIMESTAMP}.txt"
   echo ""
   "$SCRIPT_DIR/run_tests.sh" 2>&1
   echo ""
+  echo "=== test_harness.py --unit-only ==="
+  echo ""
+  if [[ -x "$PROJ/venv/bin/python" ]]; then
+    PY="$PROJ/venv/bin/python"
+  else
+    PY="${PYTHON:-python3}"
+  fi
+  "$PY" "$PROJ/test_harness.py" --unit-only 2>&1
+  echo ""
   echo "=== done ==="
 } | tee "$REPORT"
 

@@ -206,7 +206,7 @@
     "openai-compatible": {
       "options": {
         "apiKey": "local",
-        "baseURL": "http://localhost:8080/v1",
+        "baseURL": "http://127.0.0.1:8080/v1",
         "timeout": 900000,
         "headerTimeout": 180000,
         "chunkTimeout": 300000
@@ -242,7 +242,7 @@
             ]
           },
           "limit": {
-            "context": 32768,
+            "context": 49152,
             "output": 8192
           }
         }

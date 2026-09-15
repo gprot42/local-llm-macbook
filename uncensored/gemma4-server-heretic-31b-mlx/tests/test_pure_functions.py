@@ -169,9 +169,73 @@ class TestToolRemap:
 # Compaction / agentic settings
 # ---------------------------------------------------------------------------
 
+SUMMARIZE_BAIT_SYSTEM = (
+    "Do not re-summarize the conversation history. Preserve key information. "
+    "Create a concise summary only if the user asks. agent=compaction is not active."
+)
+
+TOOLS_MIN = [
+    {"type": "function", "function": {"name": "bash"}},
+    {"type": "function", "function": {"name": "write"}},
+]
+
+
 class TestCompaction:
     def test_tool_choice_none_is_compaction(self):
         assert ag._is_compaction_request({"tool_choice": "none"}) is True
+
+    def test_tool_choice_dict_none_is_compaction(self):
+        assert ag._is_compaction_request({"tool_choice": {"type": "none"}}) is True
+
+    def test_summarize_bait_system_with_tools_is_not_compaction(self):
+        body = {
+            "messages": [
+                {"role": "system", "content": SUMMARIZE_BAIT_SYSTEM},
+                {"role": "user", "content": "list files with tools"},
+            ],
+            "tools": TOOLS_MIN,
+            "tool_choice": "auto",
+        }
+        assert ag._is_compaction_request(body) is False
+
+    def test_user_summary_without_tools_is_compaction(self):
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Please summarize the conversation and preserve key information.",
+                }
+            ],
+            "max_tokens": 2048,
+        }
+        assert ag._is_compaction_request(body) is True
+
+    def test_tools_auto_never_compaction_even_if_user_says_summary(self):
+        body = {
+            "messages": [
+                {"role": "system", "content": "agent"},
+                {"role": "user", "content": "Write a summary of main.py using tools"},
+            ],
+            "tools": TOOLS_MIN,
+            "tool_choice": "auto",
+        }
+        assert ag._is_compaction_request(body) is False
+
+    def test_only_latest_user_message_used_for_text_hints(self):
+        body = {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {
+                    "role": "user",
+                    "content": "Please summarize the conversation history from earlier.",
+                },
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "now list the repo with tools"},
+            ],
+            "tools": TOOLS_MIN,
+            "tool_choice": "auto",
+        }
+        assert ag._is_compaction_request(body) is False
 
     def test_prepare_strips_tools(self):
         body = {
@@ -185,6 +249,43 @@ class TestCompaction:
         assert "tools" not in body
         assert body["tool_choice"] == "none"
         assert "plain text only" in body["messages"][0]["content"]
+
+    def test_prepare_caps_max_tokens(self):
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Please summarize the conversation and preserve key information.",
+                }
+            ],
+            "max_tokens": 8192,
+            "tool_choice": "none",
+        }
+        ag._prepare_compaction_request(body)
+        assert int(body["max_tokens"]) <= ag._COMPACTION_MAX_TOKENS_CEILING
+
+    def test_prepare_flattens_history_tool_calls(self):
+        body = {
+            "tool_choice": "none",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "bash",
+                                "arguments": '{"command":"echo hi"}',
+                            }
+                        }
+                    ],
+                }
+            ],
+        }
+        ag._prepare_compaction_request(body)
+        assistant = next(m for m in body["messages"] if m.get("role") == "assistant")
+        assert "tool_calls" not in assistant
+        assert "bash" in assistant["content"]
 
 
 class TestAgenticSettings:
@@ -204,6 +305,19 @@ class TestAgenticSettings:
         ag._force_agentic_settings(body)
         assert body["temperature"] == 0.1
         assert "logit_bias" not in body
+        assert body["enable_thinking"] is False
+
+    def test_thinking_disabled_without_tools(self):
+        body = {
+            "enable_thinking": True,
+            "thinking": {"type": "enabled"},
+            "chat_template_kwargs": {"enable_thinking": True, "foo": "bar"},
+        }
+        ag._disable_thinking(body)
+        assert body["enable_thinking"] is False
+        assert body["chat_template_kwargs"]["enable_thinking"] is False
+        assert body["chat_template_kwargs"]["foo"] == "bar"
+        assert body["thinking"]["type"] == "disabled"
 
     def test_caller_logit_bias_wins(self):
         body = {
@@ -291,6 +405,103 @@ class TestGuards:
         assert payload["choices"][0]["finish_reason"] == "stop"
 
 
+def _parse_sse_fixture(name: str) -> list[dict]:
+    path = Path(__file__).resolve().parent / "fixtures" / name
+    events: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload and payload != "[DONE]":
+            events.append(json.loads(payload))
+    return events
+
+
+class TestSseFixtures:
+    def test_bash_stream_reassembles(self):
+        events = _parse_sse_fixture("bash_tool_call.sse")
+        calls = ag._reassemble_tool_calls(events)
+        assert calls[0]["name"] == "bash"
+        args = json.loads(calls[0]["arguments"])
+        assert args["command"] == "ls -la"
+
+    def test_hallucinated_write_remapped_on_repaired_stream(self):
+        events = _parse_sse_fixture("hallucinated_write_tool.sse")
+        writers = {
+            **ag._DEFAULT_WRITERS,
+            "write_name": "Write",
+            "write_path_field": "path",
+            "write_content_field": "content",
+            "write_available": True,
+            "tool_names": frozenset({"Write", "StrReplace"}),
+        }
+        chunks = ag._emit_repaired_stream(events, writers)
+        payload = json.loads(chunks[0].decode().split("data: ", 1)[1])
+        tc = payload["choices"][0]["delta"]["tool_calls"][0]
+        assert tc["function"]["name"] == "Write"
+        args = json.loads(tc["function"]["arguments"])
+        assert args["path"] == "/tmp/hello.txt"
+        assert args["content"] == "Hello world"
+
+    def test_text_response_has_no_tool_calls(self):
+        events = _parse_sse_fixture("text_response.sse")
+        assert ag._reassemble_tool_calls(events) == {}
+        assert ag._stream_buffer_mode(events, ag._DEFAULT_WRITERS) is None
+
+
+class TestNativeToolLeak:
+    def test_broken_gemma_markup_is_a_leak(self):
+        leaked = (
+            '<tool_call|>\n'
+            '→Read vendor/fastboot/fastboot.cpp\n'
+            '<tool_call|>call:read{filePath:<|"|>/tmp/x.cpp<|"|>}'
+        )
+        assert ag.content_leaks_native_tools(leaked) is True
+
+    def test_well_formed_native_call_is_a_leak(self):
+        assert ag.content_leaks_native_tools(
+            "<|tool_call>call:bash{\"command\":\"echo hi\"}"
+        ) is True
+
+    def test_normal_prose_is_not_a_leak(self):
+        assert ag.content_leaks_native_tools("I will list the files next.") is False
+        assert ag.content_leaks_native_tools("") is False
+
+
+class TestWriteName:
+    def test_todowrite_is_not_a_write(self):
+        assert ag._is_write_tool_name("todowrite") is False
+        assert ag._is_write_tool_name("todo_write") is False
+        assert ag._is_write_tool_name("TodoWrite") is False
+
+    def test_write_and_create_file_are_writes(self):
+        assert ag._is_write_tool_name("write") is True
+        assert ag._is_write_tool_name("Write") is True
+        assert ag._is_write_tool_name("create_file") is True
+
+
+class TestMessageText:
+    def test_multimodal_text_blocks(self):
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "image_url", "image_url": {"url": "x"}},
+                {"type": "text", "text": "world"},
+            ],
+        }
+        assert ag._get_message_text(msg) == "hello\nworld"
+
+    def test_latest_user_skips_trailing_assistant(self):
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "second"},
+            {"role": "assistant", "content": "later"},
+        ]
+        assert ag._latest_user_text(messages) == "second"
+
+
 if __name__ == "__main__":
     # Minimal runner without pytest.
     import traceback
@@ -311,3 +522,153 @@ if __name__ == "__main__":
                 print(f"FAIL  {name}.{method_name}")
                 traceback.print_exc()
     raise SystemExit(1 if failures else 0)
+
+
+# ---------------------------------------------------------------------------
+# Turn-stop: Gemma end-of-turn as a stop sequence + leaked-token strip
+# ---------------------------------------------------------------------------
+
+class TestTurnStop:
+    def test_adds_stop_when_absent(self):
+        body = {}
+        ag._add_turn_stop(body)
+        assert body["stop"] == ["<turn|>"]
+
+    def test_appends_to_existing_list(self):
+        body = {"stop": ["\n\n"]}
+        ag._add_turn_stop(body)
+        assert body["stop"] == ["\n\n", "<turn|>"]
+
+    def test_idempotent(self):
+        body = {"stop": ["<turn|>"]}
+        ag._add_turn_stop(body)
+        assert body["stop"] == ["<turn|>"]
+
+    def test_promotes_string_stop(self):
+        body = {"stop": "###"}
+        ag._add_turn_stop(body)
+        assert body["stop"] == ["###", "<turn|>"]
+
+    def test_strips_leaked_turn_token_from_content(self):
+        ev = {"choices": [{"index": 0, "delta": {"content": "Hi there!<turn|>"}}]}
+        ag._strip_turn_stop(ev)
+        assert ev["choices"][0]["delta"]["content"] == "Hi there!"
+
+    def test_strip_leaves_tool_deltas_alone(self):
+        ev = {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0}]}}]}
+        ag._strip_turn_stop(ev)
+        assert ev["choices"][0]["delta"] == {"tool_calls": [{"index": 0}]}
+
+    def test_graceful_stop_reason_param(self):
+        chunks = ag._graceful_stop_chunk("id1", "m", "tool_calls")
+        assert b'"finish_reason": "tool_calls"' in chunks[0]
+        assert chunks[-1] == b"data: [DONE]\n\n"
+
+    def test_graceful_stop_default_reason_unchanged(self):
+        chunks = ag._graceful_stop_chunk("id1", "m")
+        assert b'"finish_reason": "stop"' in chunks[0]
+
+    def test_strips_leaked_turn_token_from_nonstream_message(self):
+        data = {"choices": [{"index": 0, "message": {"role": "assistant", "content": "PONG<turn|>"}}]}
+        ag._strip_turn_stop_response(data)
+        assert data["choices"][0]["message"]["content"] == "PONG"
+
+
+# ---------------------------------------------------------------------------
+# Text-collapse loop detector
+# ---------------------------------------------------------------------------
+
+_LOOP_BLOCK = [
+    "<details>",
+    "<summary>Plan</summary>",
+    "1. Search for build files (Makefile, CMakeLists.txt, etc.).",
+    "</details>",
+    "Actually, I'll just use `glob` to find them.",
+]
+
+
+class TestTextRepeats:
+    def test_detects_observed_planning_loop(self):
+        # The real failure: a 5-line block repeated; 3 copies must trigger.
+        lines = ["Intro line."] + _LOOP_BLOCK * 3
+        assert ag._text_repeats(lines) == (5, 3)
+
+    def test_two_copies_do_not_trigger(self):
+        lines = ["Intro line."] + _LOOP_BLOCK * 2
+        assert ag._text_repeats(lines) is None
+
+    def test_repeated_closing_braces_in_code_are_not_a_loop(self):
+        # Short/punctuation lines repeat legitimately in code.
+        lines = ["int main() {", "  if (a) {", "  }", "}", "}", "}", "}", "}"]
+        assert ag._text_repeats(lines) is None
+
+    def test_single_line_needs_five_copies_and_substance(self):
+        line = "This exact sentence keeps being repeated by the model again."
+        assert ag._text_repeats([line] * 4) is None
+        assert ag._text_repeats([line] * 5) == (1, 5)
+
+    def test_normal_prose_is_clean(self):
+        lines = [f"Point {i}: something different about file {i}.c" for i in range(20)]
+        assert ag._text_repeats(lines) is None
+
+    def test_ignores_blank_lines_between_copies(self):
+        lines = []
+        for _ in range(3):
+            lines += _LOOP_BLOCK + ["", "   "]
+        assert ag._text_repeats(lines) == (5, 3)
+
+
+class TestTurnCeiling:
+    def test_fresh_turn_is_fine(self):
+        assert ag._turn_ceiling_reason(1.0, saw_useful=False, is_agentic=True) is None
+
+    def test_prefill_window_allowed_before_no_output(self):
+        # Big-context prefill: no useful output yet at 60s must not abort.
+        assert ag._turn_ceiling_reason(60.0, saw_useful=False, is_agentic=True) is None
+
+    def test_no_output_hang_caught(self):
+        assert ag._turn_ceiling_reason(
+            ag._NO_OUTPUT_MAX_S + 1, saw_useful=False, is_agentic=True
+        ) == "no-output"
+
+    def test_useful_output_survives_no_output_window(self):
+        # Once useful content streamed, only the hard ceiling applies.
+        assert ag._turn_ceiling_reason(
+            ag._NO_OUTPUT_MAX_S + 1, saw_useful=True, is_agentic=True
+        ) is None
+
+    def test_hard_ceiling_agentic(self):
+        assert ag._turn_ceiling_reason(
+            ag._TURN_MAX_AGENTIC_S + 1, saw_useful=True, is_agentic=True
+        ) == "hard"
+
+    def test_hard_ceiling_plain_is_higher(self):
+        # A plain-chat turn between the two hard ceilings is not yet hard-capped.
+        mid = (ag._TURN_MAX_AGENTIC_S + ag._TURN_MAX_S) / 2
+        assert ag._turn_ceiling_reason(mid, saw_useful=True, is_agentic=True) == "hard"
+        assert ag._turn_ceiling_reason(mid, saw_useful=True, is_agentic=False) is None
+
+
+class TestCollapseRepeats:
+    def test_collapses_observed_indecisive_loop(self):
+        block = (
+            "Actually, I'll use `bash` to run `make` in `vendor/fastboot/exploit`.\n"
+            "Actually, I'll check if they want to compile the actual fastboot.\n"
+            "I'll just do it."
+        )
+        looped = "\n".join([block] * 5)
+        assert ag._collapse_repeats(looped) == block
+
+    def test_leading_text_then_loop(self):
+        out = ag._collapse_repeats("Intro.\nA\nB\nA\nB\nA\nB")
+        assert out == "Intro.\nA\nB"
+
+    def test_no_repetition_is_unchanged(self):
+        txt = "Line one.\nLine two.\nLine three."
+        assert ag._collapse_repeats(txt) == txt
+
+    def test_single_line_run_collapses(self):
+        assert ag._collapse_repeats("go\ngo\ngo\ngo") == "go"
+
+    def test_empty_string(self):
+        assert ag._collapse_repeats("") == ""

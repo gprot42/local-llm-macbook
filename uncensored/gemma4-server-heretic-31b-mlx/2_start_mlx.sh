@@ -11,6 +11,8 @@ DO_RESTART=false
 # Use --no-proxy for raw vllm-mlx on :8080 (curl smoke tests, isolating engine bugs).
 USE_PROXY=true
 PROXY_DEBUG=false
+# Post-start gate: test_harness.py --gate (unit + critical live). Skip with --no-harness-gate.
+HARNESS_GATE=true
 # Continuous batching is disabled by default for max single-user throughput.
 # With mlx-vlm>=0.5 and the mask-trim gemma4 patch, --batching is safer than
 # on mlx-vlm 0.4.x; try it if you need multi-client serving.
@@ -38,6 +40,8 @@ for arg in "$@"; do
         echo "  --batching                 Enable continuous batching (multi-user; needs lots of RAM)"
         echo "  --no-batching              Disable continuous batching (default, max throughput)"
         echo "  --debug                    Verbose DEBUG logging in the proxy"
+        echo "  --harness-gate             Run test_harness.py --gate after start (default: on with proxy)"
+        echo "  --no-harness-gate          Skip post-start harness gate"
         echo "  --enable-metrics           Expose /metrics on vllm-mlx and proxy"
         echo "  --enable-auto-tool-choice  Enable tool-call parsing (default: on, parser gemma4)"
         echo "  --no-auto-tool-choice      Disable tool-call parsing (raw text tool dumps)"
@@ -54,6 +58,7 @@ for arg in "$@"; do
         echo "  ./2_start_mlx.sh --no-proxy                            # raw vllm-mlx on :8080"
         echo "  ./2_start_mlx.sh restart                               # clear ports, then start"
         echo "  ./2_start_mlx.sh --debug --enable-metrics              # metrics + verbose logs"
+        echo "  ./2_start_mlx.sh --no-harness-gate                     # start without live gate"
         echo "  ./2_start_mlx.sh --no-auto-tool-choice                 # debug without tool parser"
         echo "  ./2_start_mlx.sh --batching                            # multi-user (128 GB+)"
         echo ""
@@ -72,6 +77,8 @@ for arg in "$@"; do
     [[ "$arg" == "--batching" ]]              && CONTINUOUS_BATCHING=true
     [[ "$arg" == "--no-batching" ]]           && CONTINUOUS_BATCHING=false
     [[ "$arg" == "--debug" ]]                 && PROXY_DEBUG=true
+    [[ "$arg" == "--harness-gate" ]]          && HARNESS_GATE=true
+    [[ "$arg" == "--no-harness-gate" ]]       && HARNESS_GATE=false
     [[ "$arg" == "--enable-metrics" ]]          && ENABLE_METRICS=true
     [[ "$arg" == "--enable-auto-tool-choice" ]] && ENABLE_AUTO_TOOL_CHOICE=true
     [[ "$arg" == "--no-auto-tool-choice" ]]    && ENABLE_AUTO_TOOL_CHOICE=false
@@ -267,6 +274,7 @@ chmod +x apply_local_patches.sh check_upstream_patches.sh 2>/dev/null || true
 # ── Status ─────────────────────────────────────────────────────────────────
 echo "→ Continuous batching:       $([ "$CONTINUOUS_BATCHING" = true ] && echo "Enabled (multi-user)" || echo "Disabled (single-user max throughput)")"
 echo "→ Kilo Code / Continue proxy:$([ "$USE_PROXY" = true ] && echo " Enabled (default; pass --no-proxy for raw vllm-mlx)" || echo " Disabled (--no-proxy)")"
+echo "→ Harness gate:              $([ "$USE_PROXY" = true ] && [ "$HARNESS_GATE" = true ] && echo "Enabled (test_harness.py --gate)" || echo "Disabled")"
 echo "→ Proxy debug logging:       $([ "$PROXY_DEBUG" = true ] && echo "Enabled (--debug)" || echo "Disabled")"
 echo "→ Metrics endpoint:          $([ "$ENABLE_METRICS" = true ] && echo "Enabled (--enable-metrics)" || echo "Disabled (pass --enable-metrics to enable)")"
 echo "→ Auto tool choice:          $([ "$ENABLE_AUTO_TOOL_CHOICE" = true ] && echo "Enabled (parser: ${TOOL_CALL_PARSER})" || echo "Disabled (--no-auto-tool-choice)")"
@@ -370,6 +378,23 @@ if [ "$USE_PROXY" = true ]; then
         fi
         sleep 1
     done
+
+    # Post-start harness gate (before trusting Kilo). Not a full Kilo emulator.
+    if [ "$HARNESS_GATE" = true ]; then
+        echo "→ Harness gate: $VENV_PY test_harness.py --gate ..."
+        if ! "$VENV_PY" "$SCRIPT_DIR/test_harness.py" --gate --base "http://127.0.0.1:${PUBLIC_PORT}"; then
+            echo "ERROR: harness gate failed. Fix proxy/config before using Kilo."
+            echo "       Skip with: ./2_start_mlx.sh --no-harness-gate"
+            echo "       Full suite: python3 test_harness.py"
+            [ -n "${PROXY_PID:-}" ] && kill -TERM "$PROXY_PID" 2>/dev/null || true
+            [ -n "${MLX_PID:-}" ] && kill -TERM "$MLX_PID" 2>/dev/null || true
+            sleep 1
+            [ -n "${PROXY_PID:-}" ] && kill -KILL "$PROXY_PID" 2>/dev/null || true
+            [ -n "${MLX_PID:-}" ] && kill -KILL "$MLX_PID" 2>/dev/null || true
+            exit 1
+        fi
+        echo "→ Harness gate passed"
+    fi
 else
     echo "→ Waiting for vllm-mlx to bind 127.0.0.1:$PUBLIC_PORT ..."
     for i in $(seq 1 180); do
