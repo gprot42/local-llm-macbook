@@ -27,7 +27,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | **Qwen3-32B Heretic** | `uncensored/archived/qwen3-32b-heretic-mlx/` | **Text only** | Dense Qwen3, not 3.6 (archived) |
 | **Qwen3.5-122B Abliterated** | `uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/` | **Text only** | Large MoE AR path |
 | **Qwen3.5-122B DFlash** | `uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/` | **Text only** | Same target + draft; text OpenAI server |
-| **GLM-4.7 Flash Heretic** | `uncensored/glm-4.7-flash-heretic-gguf-ollama/` | **Text only** | Ollama GGUF |
+| **GLM-4.7 Flash Heretic** | `uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/` | **Text only** | Ollama GGUF |
 
 ### Related weights (not always a full stack)
 
@@ -437,7 +437,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 
 ---
 
-### GLM-4.7 Flash Heretic (`uncensored/glm-4.7-flash-heretic-gguf-ollama/`)
+### GLM-4.7 Flash Heretic (`uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/`)
 
 | | |
 |--|--|

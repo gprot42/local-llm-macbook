@@ -169,6 +169,6 @@ template / client settings. That is normal model behavior, not a stack bug.
 - After moving this folder, re-run `./1_setup_download.sh --skip-download` so
   venv shebangs are repaired.
 - For a lighter uncensored MoE path, see
-  [`../glm-4.7-flash-heretic-gguf-ollama/`](../glm-4.7-flash-heretic-gguf-ollama/).
+  [`../glm-4.7-flash-heretic-30b-a3b-gguf-ollama/`](../glm-4.7-flash-heretic-30b-a3b-gguf-ollama/).
 - For uncensored Gemma chat, see
   [`../gemma4-server-heretic-31b-mlx/`](../gemma4-server-heretic-31b-mlx/).

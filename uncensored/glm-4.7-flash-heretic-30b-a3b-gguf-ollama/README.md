@@ -10,7 +10,7 @@ Weights: [DavidAU/GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF](ht
 ## Run Q8_0 (~32 GB, default)
 
 ```bash
-cd glm-4.7-flash-heretic-gguf-ollama
+cd glm-4.7-flash-heretic-30b-a3b-gguf-ollama
 
 # once: install Ollama if needed
 brew install ollama
