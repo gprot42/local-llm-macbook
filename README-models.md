@@ -16,6 +16,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | **Qwen 3.8 27B mtplx** | `censored/qwen3-8-27b-coder-mtplx/` | **Text only** | Next 27B; harness ready; weights when published |
 | **Qwen 3.8 27B OBLITERATED mtplx** | `uncensored/archived/qwen3-8-27b-obliterated-mtplx/` | **Text only** | Archived (unstable in Kilo loops); hardened Kilo proxy on :8768; mlx-4bit ~14 GB |
 | **Muse Glimmer 30B** | `censored/muse-glimmer-30b-mlx/` | **Text + image** | Meta MSL agentic 30B; mlx-vlm + official DFlash |
+| **Ternary Bonsai 2 27B** | `censored/ternary-bonsai-2-27b-gguf-llamacpp/` | **Text + image** | PrismML ternary (~1.72 bit) Qwen3.8 27B; llama.cpp fork, `:8089` |
 | **DeepSeek V4 Flash ds4** | `censored/deepseek-v4-flash-ds4/` | **Text only** | Native Metal GGUF |
 | **DeepSeek V4 Flash MLX** | `censored/deepseek-v4-flash-2bit-dq-mlx/` | **Text only** | mlx-lm community path |
 | **Gemma 4 31B AtomicChat** | `censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/` | **Text only** | Language quant + chat template; not a vision package |
