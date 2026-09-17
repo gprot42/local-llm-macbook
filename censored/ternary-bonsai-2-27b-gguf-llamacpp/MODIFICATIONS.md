@@ -16,7 +16,7 @@ An MLX stack was scaffolded first and abandoned once this was confirmed.
 | File | Purpose |
 |------|---------|
 | `1_setup_download.sh` | Clone PrismML's llama.cpp fork (branch `prism`, pinned tag `prism-b10683-d8f26ee`), build `llama-server` with Metal, download `PQ2_0` GGUF (7.21 GB) + `mmproj-Q8_0` (0.63 GB). |
-| `2_start_llama.sh` | Serve on `:8089` — `llama-server -m <PQ2_0> --mmproj <mmproj> --alias ternary-bonsai-2-27b --jinja -ngl 999 -fa on -c 32768 --temp 1.0 --top-p 0.95 --top-k 20`. `status` / `stop` subcommands. |
+| `2_start_llama.sh` | Serve on `:8089` — `llama-server -m <PQ2_0> --mmproj <mmproj> --alias ternary-bonsai-2-27b --jinja -ngl 999 -fa on -c 65536 --temp 1.0 --top-p 0.95 --top-k 20`. `status` / `stop` subcommands. |
 | `README.md` | Stack docs. |
 | `kilo.json` | Per-stack Kilo config (provider `bonsai`, default model `bonsai/ternary-bonsai-2-27b`). |
 
@@ -24,7 +24,7 @@ Git-ignored (built/downloaded locally): `engine/` (fork checkout + build), `mode
 
 ## Repo edits
 
-- **`kilo.json`** (root, the live-config source): added the `bonsai` provider → `baseURL http://127.0.0.1:8089/v1`, model `ternary-bonsai-2-27b`, `tool_call: true`, `text + image`, `limit.context 32768 / output 8192`. Installed live via `install_kilo.sh`.
+- **`kilo.json`** (root, the live-config source): added the `bonsai` provider → `baseURL http://127.0.0.1:8089/v1`, model `ternary-bonsai-2-27b`, `tool_call: true`, `text + image`, `limit.context 49152 / output 8192`. Installed live via `install_kilo.sh`.
 - **`sync_agent_prompts.py`**: registered the per-stack `kilo.json` so the shared prompt block stays in sync (`--check` green).
 - **`README.md`**: models table + endpoints table rows; added `Ternary Bonsai 2 (8089)` to the ports line.
 - **`README-models.md`**: catalog row.

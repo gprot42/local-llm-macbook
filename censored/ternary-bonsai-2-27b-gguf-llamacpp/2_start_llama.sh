@@ -4,7 +4,7 @@
 #
 #   --port PORT   Public API port (default: 8089)
 #   --host HOST   Bind host (default: 127.0.0.1)
-#   --ctx N       Context window (default: 32768; BONSAI_CTX env also works)
+#   --ctx N       Context window (default: 65536; BONSAI_CTX env also works)
 #   status | stop
 set -euo pipefail
 

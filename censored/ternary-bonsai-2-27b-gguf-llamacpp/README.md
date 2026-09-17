@@ -35,7 +35,7 @@ cd censored/ternary-bonsai-2-27b-gguf-llamacpp
 
 ## Notes
 
-- **Context** defaults to `-c 32768` (override `BONSAI_CTX`). The model supports far more, but Kilo's `limit.context` is capped at 32768 to match and stay responsive.
+- **Context** defaults to `-c 65536` (override `BONSAI_CTX`). The model supports far more; Kilo's `limit.context` is capped at 49152 (peak 57344 < 65536) to compact before overflow. Raise both together for more.
 - **Sampling** starts at the Bonsai 2 base defaults (temp 1.0 / top‑p 0.95 / top‑k 20); Kilo overrides per agent in `kilo.json`.
 - **Thinking** stays on (27B is a thinking model).
 - Port **8089** so it runs beside the other stacks (see the root README ports table).
