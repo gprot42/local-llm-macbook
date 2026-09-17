@@ -34,13 +34,17 @@ Git-ignored (built/downloaded locally): `engine/` (fork checkout + build), `mode
 
 - Hadamard-rotated **ternary** (~1.72 bit/weight) quant of **Qwen3.8 27B**; ~9× smaller than FP16, ~98% of aggregate benchmark performance.
 - **Text + image**, native tool calling (BFCL v3 ~74), **thinking model** (reasoning stays on).
-- Context 262K native; capped to **32768** in Kilo for responsiveness (raise `BONSAI_CTX` + `limit.context` together).
+- Context 262K native. Served window `-c 65536`; Kilo `limit.context 49152` / `output 8192` (peak 57344 < 65536) — a coherent cap that compacts before overflow. Raise `BONSAI_CTX` + `limit.context` together for more.
 
 ## Verification (live, on `:8089`)
 
 - Text: `finish=stop`, `"bonsai ok"`.
 - Tool calling (`--jinja`): `finish=tool_calls`, `get_weather({"city":"Paris"})`.
 - Thinking: response returned `reasoning_content` separate from the answer.
+
+## Fixes
+
+- **Context overflow** (request 41206 > 32768): raised served window to `-c 65536` and set Kilo `limit.context 49152`/`output 8192` (was 32768). Server default `BONSAI_CTX` bumped to 65536.
 
 ## Run
 

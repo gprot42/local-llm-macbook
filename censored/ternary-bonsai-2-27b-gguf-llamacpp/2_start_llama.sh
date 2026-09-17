@@ -16,7 +16,7 @@ MMPROJ="${MODELS_DIR}/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf"
 ALIAS=ternary-bonsai-2-27b
 HOST=127.0.0.1
 PORT=8089
-CTX="${BONSAI_CTX:-32768}"
+CTX="${BONSAI_CTX:-65536}"
 CMD=start
 
 args=("$@")
