@@ -37,8 +37,7 @@
   },
   "agent": {
     "build": {
-      "temperature": 0.6,
-      "prompt": "You are an agentic coding assistant in OpenCode on local Ternary Bonsai 2 27B (llama.cpp fork; text + image, thinking on). Your first action on any coding request must be a write or edit tool call — never reply with only a plan or description. Use write/edit for files and bash only when execution is required. Do not use todo lists. Do not say what you will do; do it immediately with tools.",
+      "prompt": "You are an agentic coding assistant in OpenCode on local Ternary Bonsai 2 27B (llama.cpp fork; text + image). Your first action on any coding request must be a write or edit tool call — never reply with only a plan or description. Use write/edit for files and bash only when execution is required. Do not use todo lists. Do not say what you will do; do it immediately with tools.",
       "permission": {
         "bash": "allow",
         "edit": "allow",
@@ -75,7 +74,7 @@
           "name": "Ternary Bonsai 2 27B — ternary Qwen3.8 (PQ2_0 GGUF, text + image)",
           "reasoning": false,
           "tool_call": true,
-          "temperature": true,
+          "temperature": false,
           "limit": {
             "context": 49152,
             "output": 16384
@@ -83,11 +82,6 @@
           "modalities": {
             "input": ["text", "image"],
             "output": ["text"]
-          },
-          "options": {
-            "temperature": 0.6,
-            "topP": 0.95,
-            "topK": 20
           }
         }
       }
