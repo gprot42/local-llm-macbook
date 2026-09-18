@@ -34,7 +34,7 @@ Git-ignored (built/downloaded locally): `engine/` (fork checkout + build), `mode
 
 - Hadamard-rotated **ternary** (~1.72 bit/weight) quant of **Qwen3.8 27B**; ~9× smaller than FP16, ~98% of aggregate benchmark performance.
 - **Text + image**, native tool calling (BFCL v3 ~74), **thinking model** (reasoning stays on).
-- Context 262K native. Served window `-c 65536`; Kilo `limit.context 49152` / `output 8192` (peak 57344 < 65536) — a coherent cap that compacts before overflow. Raise `BONSAI_CTX` + `limit.context` together for more.
+- Context 262K native. Served window `-c 81920`; Kilo `limit.context 49152` / `output 16384` (peak 65536 < 81920) — a coherent cap that compacts before overflow. Raise `BONSAI_CTX` + `limit.context` together for more.
 
 ## Verification (live, on `:8089`)
 
@@ -44,6 +44,7 @@ Git-ignored (built/downloaded locally): `engine/` (fork checkout + build), `mode
 
 ## Fixes
 
+- **Truncated `write` tool call** (large file, unterminated JSON): the client aborted the slow ~5-min generation at `chunkTimeout` (300s, ~6926 tokens). Raised `chunkTimeout 300000 -> 900000`, `timeout 900000 -> 1800000`, `limit.output 8192 -> 16384`, and the served window `-c 65536 -> 81920` (peak 49152+16384=65536 < 81920). Note: the 27B ternary model is slow (~20-30 tok/s), so very large one-shot files remain marginal — GLM is faster for those.
 - **Context overflow** (request 41206 > 32768): raised served window to `-c 65536` and set Kilo `limit.context 49152`/`output 8192` (was 32768). Server default `BONSAI_CTX` bumped to 65536.
 
 ## Run

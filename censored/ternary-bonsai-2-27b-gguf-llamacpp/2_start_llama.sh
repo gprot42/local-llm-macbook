@@ -4,7 +4,7 @@
 #
 #   --port PORT   Public API port (default: 8089)
 #   --host HOST   Bind host (default: 127.0.0.1)
-#   --ctx N       Context window (default: 65536; BONSAI_CTX env also works)
+#   --ctx N       Context window (default: 81920; BONSAI_CTX env also works)
 #   status | stop
 set -euo pipefail
 
@@ -16,7 +16,7 @@ MMPROJ="${MODELS_DIR}/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf"
 ALIAS=ternary-bonsai-2-27b
 HOST=127.0.0.1
 PORT=8089
-CTX="${BONSAI_CTX:-65536}"
+CTX="${BONSAI_CTX:-81920}"
 CMD=start
 
 args=("$@")
