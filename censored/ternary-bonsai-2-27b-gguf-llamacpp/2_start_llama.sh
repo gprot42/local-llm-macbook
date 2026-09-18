@@ -5,6 +5,8 @@
 #   --port PORT   Public API port (default: 8089)
 #   --host HOST   Bind host (default: 127.0.0.1)
 #   --ctx N       Context window (default: 81920; BONSAI_CTX env also works)
+#   --think       Enable reasoning (default: off; BONSAI_THINK=1 also works)
+#   --no-think    Disable reasoning (default)
 #   status | stop
 set -euo pipefail
 
@@ -17,6 +19,11 @@ ALIAS=ternary-bonsai-2-27b
 HOST=127.0.0.1
 PORT=8089
 CTX="${BONSAI_CTX:-81920}"
+# Reasoning OFF by default: this is a thinking model, but under agentic use it
+# burns its whole output budget "thinking" and never emits the tool call
+# ("hit its output limit while reasoning and produced no actionable output").
+# Off = direct tool calls / file writes. Re-enable with --think or BONSAI_THINK=1.
+THINK="${BONSAI_THINK:-0}"
 CMD=start
 
 args=("$@")
@@ -25,6 +32,8 @@ for ((i=0; i<${#args[@]}; )); do
     --port) PORT="${args[$((i+1))]:-$PORT}"; ((i+=2)) ;;
     --host) HOST="${args[$((i+1))]:-$HOST}"; ((i+=2)) ;;
     --ctx)  CTX="${args[$((i+1))]:-$CTX}"; ((i+=2)) ;;
+    --think)    THINK=1; ((i+=1)) ;;
+    --no-think) THINK=0; ((i+=1)) ;;
     status|stop|start) CMD="${args[$i]}"; ((i+=1)) ;;
     *) echo "unknown arg: ${args[$i]}" >&2; exit 2 ;;
   esac
@@ -50,14 +59,21 @@ esac
 MMPROJ_ARG=()
 [[ -f "${MMPROJ}" ]] && MMPROJ_ARG=(--mmproj "${MMPROJ}") || echo "→ note: mmproj missing, image input disabled"
 
+if [[ "${THINK}" == "1" ]]; then
+  REASON_ARGS=(--reasoning on)
+else
+  REASON_ARGS=(--reasoning off --chat-template-kwargs '{"enable_thinking": false}')
+fi
 echo "=== Ternary Bonsai 2 27B — llama.cpp fork on http://${HOST}:${PORT}/v1 ==="
-echo "→ model $(basename "${MODEL}") | ctx ${CTX} | --jinja tool calling"
+echo "→ model $(basename "${MODEL}") | ctx ${CTX} | --jinja tool calling | reasoning $([[ "${THINK}" == "1" ]] && echo on || echo off)"
 LOG="${SCRIPT_DIR}/.bonsai_llama.log"
 # --jinja: native OpenAI-style tool calling. Sampling = Bonsai 2 base defaults
-# (temp 1.0 / top-p 0.95 / top-k 20); Kilo overrides per-agent. Thinking on.
+# (temp 1.0 / top-p 0.95 / top-k 20); Kilo overrides per-agent. Reasoning off by
+# default (see THINK above) so the model emits tool calls instead of exhausting
+# its output on thinking.
 nohup "${BIN}" -m "${MODEL}" "${MMPROJ_ARG[@]}" --alias "${ALIAS}" \
   --host "${HOST}" --port "${PORT}" -ngl 999 -fa on -c "${CTX}" \
-  --jinja --temp 1.0 --top-p 0.95 --top-k 20 \
+  --jinja "${REASON_ARGS[@]}" --temp 1.0 --top-p 0.95 --top-k 20 \
   >>"${LOG}" 2>&1 &
 SRV=$!
 echo "→ pid ${SRV}; log ${LOG}; waiting for readiness ..."

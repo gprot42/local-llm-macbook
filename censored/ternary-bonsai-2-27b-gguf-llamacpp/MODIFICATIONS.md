@@ -44,6 +44,7 @@ Git-ignored (built/downloaded locally): `engine/` (fork checkout + build), `mode
 
 ## Fixes
 
+- **Output exhausted while reasoning** ("produced no actionable output", e.g. the mario.html write never landed): the thinking model spent its whole budget reasoning. Default the server to **`--reasoning off`** (`--chat-template-kwargs '{"enable_thinking": false}'`) via a `--think`/`BONSAI_THINK` toggle so it emits tool calls directly; set OpenCode `reasoning: false`. Re-enable thinking with `./2_start_llama.sh --think`.
 - **Truncated `write` tool call** (large file, unterminated JSON): the client aborted the slow ~5-min generation at `chunkTimeout` (300s, ~6926 tokens). Raised `chunkTimeout 300000 -> 900000`, `timeout 900000 -> 1800000`, `limit.output 8192 -> 16384`, and the served window `-c 65536 -> 81920` (peak 49152+16384=65536 < 81920). Note: the 27B ternary model is slow (~20-30 tok/s), so very large one-shot files remain marginal — GLM is faster for those.
 - **Context overflow** (request 41206 > 32768): raised served window to `-c 65536` and set Kilo `limit.context 49152`/`output 8192` (was 32768). Server default `BONSAI_CTX` bumped to 65536.
 
