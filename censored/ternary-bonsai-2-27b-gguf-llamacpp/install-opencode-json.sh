@@ -4,7 +4,8 @@
 #
 # Merges the bonsai provider from ./opencode.json into
 # ~/.config/opencode/opencode.json (preserves your other providers).
-# Sets model + small_model to bonsai/ternary-bonsai-2-27b.
+# Sets model + small_model to bonsai/ternary-bonsai-2-27b and installs the
+# build agent's prompt (anti-loop rules); other agent settings are untouched.
 #
 # Usage:
 #   ./install-opencode-json.sh              # merge provider (backs up existing)
@@ -98,6 +99,15 @@ if "small_model" in source:
     dest["small_model"] = source["small_model"]
 if "$schema" in source:
     dest["$schema"] = source["$schema"]
+
+# Agent prompts: install the fragment's `agent.<name>.prompt` (the build agent's
+# anti-loop rules: no foreground servers, no third retry of a failed command,
+# stop when the files are written). Only the prompt is copied — an existing
+# agent's temperature/permission/model settings are left as they are.
+for agent_name, agent_cfg in (source.get("agent") or {}).items():
+    if "prompt" not in agent_cfg:
+        continue
+    dest.setdefault("agent", {}).setdefault(agent_name, {})["prompt"] = agent_cfg["prompt"]
 
 dest_path.write_text(json.dumps(dest, indent=2) + "\n", encoding="utf-8")
 dest_path.chmod(0o600)
