@@ -18,6 +18,7 @@ An MLX stack was scaffolded first and abandoned once this was confirmed.
 | `1_setup_download.sh` | Clone PrismML's llama.cpp fork (branch `prism`, pinned tag `prism-b10683-d8f26ee`), build `llama-server` with Metal, download `PQ2_0` GGUF (7.21 GB) + `mmproj-Q8_0` (0.63 GB). |
 | `2_start_llama.sh` | Serve on `:8089` — `llama-server -m <PQ2_0> --mmproj <mmproj> --alias ternary-bonsai-2-27b --jinja -ngl 999 -fa on -c 81920 -np 1 --cache-ram 24576 --reasoning off --temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 1.5`. `status` / `stop` subcommands; `--think` / `--think-budget N` switch to `--reasoning on --reasoning-preserve --reasoning-budget N` with the thinking preset (`1.0/0.95/20`). |
 | `README.md` | Stack docs, incl. the stability-tuning table. |
+| `THINKING.md` | How to enable thinking (OpenCode `/models`, server-wide, per request), when it's worth it, its measured costs, budget guidance, troubleshooting. |
 | `kilo.json` | Per-stack Kilo config (provider `bonsai`, default model `bonsai/ternary-bonsai-2-27b`). |
 | `opencode.json` + `install-opencode-json.sh` | OpenCode provider fragment + installer (merges into `~/.config/opencode/opencode.json`, sets `model`/`small_model`). Two model entries: `ternary-bonsai-2-27b` (default) and `ternary-bonsai-2-27b-think` (per-request thinking, 1024 budget). |
 
