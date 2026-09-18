@@ -26,10 +26,10 @@ cd censored/ternary-bonsai-2-27b-gguf-llamacpp
 # 1. Build the fork (Metal) + download PQ2_0 GGUF + mmproj  (~5 min build, ~7.9 GB)
 ./1_setup_download.sh
 
-# 2. Serve on :8089  (OpenAI-compatible, --jinja tool calling, image input, thinking on w/ 2048 budget)
+# 2. Serve on :8089  (OpenAI-compatible, --jinja tool calling, image input, reasoning off)
 ./2_start_llama.sh
 #    status / stop:  ./2_start_llama.sh status | ./2_start_llama.sh stop
-#    budget / off:   ./2_start_llama.sh --think-budget 8192   |   ./2_start_llama.sh --no-think
+#    thinking:       ./2_start_llama.sh --think   (2048-token budget; --think-budget N to change)
 
 # 3. Kilo / OpenCode — provider `bonsai`, model `bonsai/ternary-bonsai-2-27b`, API http://127.0.0.1:8089/v1
 ```
@@ -37,8 +37,8 @@ cd censored/ternary-bonsai-2-27b-gguf-llamacpp
 ## Notes
 
 - **Context** defaults to `-c 81920` (override `BONSAI_CTX`). The model supports 262K; OpenCode/Kilo `limit.context` is capped at 49152 with `output` 16384 (peak 65536 < 81920) so the client compacts before the server overflows. Raise both together for more.
-- **Sampling is owned by the server**, per mode, straight from the [PrismML model card](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf#generation-parameters): thinking (default) `temp 1.0 / top‑p 0.95 / top‑k 20 / min‑p 0 / presence 0`; non‑thinking `temp 0.7 / top‑p 0.8 / top‑k 20 / min‑p 0 / presence 1.5`. The OpenCode model is declared `"temperature": false` so the client never overrides the preset (Qwen warns greedy decoding makes this family loop).
-- **Reasoning is on by default, with a 2048‑token budget** (`--reasoning on --reasoning-budget 2048 --reasoning-preserve`, PrismML's "Medium"). The 27B thinks at `xhigh` effort and, unbounded, exhausts its output budget before emitting the tool call — the budget cuts the thinking off and the tool call/answer always follows (verified). `--think-budget N` changes it (`-1` = unlimited); `./2_start_llama.sh --no-think` (or `BONSAI_THINK=0`) switches to direct answers with the non‑thinking preset. OpenCode's model is declared `"reasoning": true` so the thinking blocks render, and it sends `reasoning_content` back so the prefix cache stays valid across tool loops.
+- **Sampling is owned by the server**, per mode, straight from the [PrismML model card](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf#generation-parameters): non‑thinking (default) `temp 0.7 / top‑p 0.8 / top‑k 20 / min‑p 0 / presence 1.5`; thinking `temp 1.0 / top‑p 0.95 / top‑k 20 / min‑p 0 / presence 0`. The OpenCode model is declared `"temperature": false` so the client never overrides the preset (Qwen warns greedy decoding makes this family loop).
+- **Reasoning is off by default** (`--reasoning off`, OpenCode model `"reasoning": false`) — for agentic use, not because the model can't think. Two measured reasons: unbounded, the 27B (`xhigh` effort) exhausts its output budget before the tool call; and even under a budget, OpenCode sends every step's `reasoning_content` back and the template keeps it for the whole tool loop, so context grows ~2k tokens per step — a one‑hour game‑building session ended in `Compaction exhausted: context still exceeds model limits after 3 attempts` and ran ~2× slower. `./2_start_llama.sh --think` re‑enables it under a 2048‑token budget (`--think-budget N`, `-1` unlimited; verified: the budget cuts thinking off and the tool call still follows, `--reasoning-preserve` keeps the cache valid). Set OpenCode's model `"reasoning": true` alongside to render the thinking blocks.
 - Port **8089** so it runs beside the other stacks (see the root README ports table).
 - `engine/`, `models/`, and `venv/` are git‑ignored (built/downloaded locally).
 
@@ -50,7 +50,8 @@ Measured on an M5 Max / 128 GB after reading [prismml.com/news/bonsai-2-27b](htt
 |---|---|---|
 | 40–90 s "hang" before the first token on a new session, then again after compaction | `llama-server` auto‑picked **4 slots sharing one unified KV**; the conversation hopped slots and re‑prefilled OpenCode's 14–16k‑token prompt at 187–330 tok/s | **`-np 1`** (`BONSAI_SLOTS`). One slot owns the window; cold prefill now runs at ~690 tok/s (PrismML's pp512 spec is 765) |
 | Same re‑prefill after every title / subagent request | The 8 GiB default RAM prompt cache can't hold one full conversation (~187 KiB/token incl. hybrid‑attention checkpoints ⇒ ~9 GiB at 49k) | **`--cache-ram 24576`** (`BONSAI_CACHE_RAM`). Verified: title request in between ⇒ conversation restored, 4 tokens re‑processed |
-| Output exhausted while reasoning | Thinking on at `xhigh` effort, unbounded | `--reasoning-budget 2048` (default; `--no-think` for direct answers) |
+| Output exhausted while reasoning | Thinking on at `xhigh` effort, unbounded | `--reasoning off` default; `--think` applies a 2048 budget |
+| `Compaction exhausted: context still exceeds model limits after 3 attempts` (thinking on) | Reasoning is retained in context for the whole tool loop (~2k/step); OpenCode's usable window is `49152 − 16384 = 32768` and the post‑compaction floor is ~25–28k (14k baseline prompt + ~10k summary), so 2–3 steps refill it | Reasoning off (default). Also helps: raise `limit.context`/`-c`, trim the project's instruction prompt |
 | Client sampling never applied | OpenCode passes model `options` **verbatim** — `topP`/`topK` reached the server as unknown keys | Presets moved server‑side; OpenCode model `temperature: false` |
 
 Decode speed is already at PrismML's spec (**~46 tok/s** short‑context, 36–40 at 5k depth, vs their 47.0 tg128 on M5 Max) — the slowness people feel is prefill. Not adopted, with reasons: **speculative decoding** (PrismML: net loss for chat/agent workloads on Apple Silicon, and no drafter ships for Bonsai 2); **KV4 / q8 KV** (only needed under memory pressure); **larger `-ub`** (benchmarked slower on Metal: 486–556 tok/s at the default vs 316–399 at `-ub 2048`).

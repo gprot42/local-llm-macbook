@@ -5,10 +5,10 @@
 #   --port PORT       Public API port (default: 8089)
 #   --host HOST       Bind host (default: 127.0.0.1)
 #   --ctx N           Context window (default: 81920; BONSAI_CTX env also works)
-#   --think           Reasoning on with the default budget (default; BONSAI_THINK=1)
-#   --think-budget N  Reasoning on, capped at N tokens (default 2048 ≈ PrismML "Medium";
+#   --no-think        Reasoning off (default; BONSAI_THINK=0) — direct tool calls, fastest
+#   --think           Reasoning on, capped at the default 2048-token budget (BONSAI_THINK=1)
+#   --think-budget N  Reasoning on, capped at N tokens (2048 ≈ PrismML "Medium", 512 "Low";
 #                     -1 = unlimited; BONSAI_THINK_BUDGET=N)
-#   --no-think        Reasoning off (BONSAI_THINK=0) — direct tool calls, fastest
 #   status | stop
 #
 # Tuning env (defaults chosen for one OpenCode/Kilo user on Apple Silicon — see README):
@@ -33,13 +33,16 @@ CTX="${BONSAI_CTX:-81920}"
 SLOTS="${BONSAI_SLOTS:-1}"
 CACHE_RAM="${BONSAI_CACHE_RAM:-24576}"
 PRESENCE="${BONSAI_PRESENCE:-1.5}"
-# Reasoning ON by default, but BUDGETED: this is a thinking model at "xhigh"
-# effort, and unbounded it burns the whole output budget thinking and never emits
-# the tool call ("hit its output limit while reasoning and produced no actionable
-# output"). --reasoning-budget caps the thinking (PrismML's UI calls 2048
-# "Medium", 8192 "High") so the tool call / file write always has room.
-# --think-budget -1 lifts the cap; --no-think switches to direct answers.
-THINK="${BONSAI_THINK:-1}"
+# Reasoning OFF by default for agentic use. Two measured reasons (see README):
+#  1. Unbounded, the model (xhigh effort) burns the whole output budget thinking
+#     and never emits the tool call ("produced no actionable output").
+#  2. Even budgeted, OpenCode sends every step's reasoning_content back and the
+#     template keeps it for the whole tool loop, so the context grows ~2k per
+#     step -> compaction can't get under the limit ("Compaction exhausted") and
+#     turns take ~2x longer.
+# --think / --think-budget N re-enable it under a budget (PrismML's UI calls
+# 2048 "Medium", 8192 "High"); -1 lifts the cap.
+THINK="${BONSAI_THINK:-0}"
 THINK_BUDGET="${BONSAI_THINK_BUDGET:-2048}"
 CMD=start
 
@@ -89,7 +92,7 @@ if [[ "${THINK}" == "1" ]]; then
   SAMPLING=(--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0)
   MODE="on (budget $([[ "${THINK_BUDGET}" == "-1" ]] && echo unlimited || echo "${THINK_BUDGET} tokens"))"
 else
-  # Instruct / non-thinking mode (--no-think): temp 0.7 / top-p 0.8 / top-k 20 /
+  # Instruct / non-thinking mode (default): temp 0.7 / top-p 0.8 / top-k 20 /
   # min-p 0 / presence 1.5 (Qwen: never greedy-decode this family — it loops).
   REASON_ARGS=(--reasoning off)
   SAMPLING=(--temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty "${PRESENCE}" --repeat-penalty 1.0)
