@@ -58,5 +58,5 @@ cd censored/ternary-bonsai-2-27b-gguf-llamacpp
 
 ## Not done
 
-- OpenCode's live config (`~/.config/opencode/opencode.json`) was **not** given the `bonsai` provider (only Kilo was configured).
+- OpenCode: `opencode.json` fragment + `install-opencode-json.sh` added to the stack; installed into `~/.config/opencode/opencode.json` (default model set to `bonsai/ternary-bonsai-2-27b`).
 - Optional `--no-think` toggle for `2_start_llama.sh` not added.
