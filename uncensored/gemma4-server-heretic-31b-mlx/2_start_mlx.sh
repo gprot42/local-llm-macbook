@@ -7,6 +7,7 @@ cd "$SCRIPT_DIR"
 echo "=== Gemma 4 31B Heretic Uncensored — vllm-mlx Server + Kilo Code Proxy ==="
 
 DO_RESTART=false
+DO_STOP=false
 # Default on: Kilo/Continue agent turns need Harmony bias, temp floor, tool repair.
 # Use --no-proxy for raw vllm-mlx on :8080 (curl smoke tests, isolating engine bugs).
 USE_PROXY=true
@@ -51,11 +52,13 @@ for arg in "$@"; do
         echo "  --api-key KEY              Require API key for all requests"
         echo "  --rate-limit N             Requests-per-minute limit"
         echo "  restart                    Stop :8080/:8090, then start (always use if port is stuck)"
+        echo "  stop                       Stop :8080/:8090 and exit (does not start)"
         echo "  --help, -h                 Show this help"
         echo ""
         echo "Examples:"
         echo "  ./2_start_mlx.sh                                       # proxy + gemma4 tool/reasoning parsers"
         echo "  ./2_start_mlx.sh --no-proxy                            # raw vllm-mlx on :8080"
+        echo "  ./2_start_mlx.sh stop                                  # free :8080/:8090"
         echo "  ./2_start_mlx.sh restart                               # clear ports, then start"
         echo "  ./2_start_mlx.sh --debug --enable-metrics              # metrics + verbose logs"
         echo "  ./2_start_mlx.sh --no-harness-gate                     # start without live gate"
@@ -84,6 +87,7 @@ for arg in "$@"; do
     [[ "$arg" == "--no-auto-tool-choice" ]]    && ENABLE_AUTO_TOOL_CHOICE=false
     [[ "$arg" == "--no-reasoning-parser" ]]    && REASONING_PARSER=""
     [[ "$arg" == "restart" ]] && DO_RESTART=true
+    [[ "$arg" == "stop" ]] && DO_STOP=true
     if [[ "$arg" == "26b" || "$arg" == "26B" || "$arg" == "31b" || "$arg" == "31B" ]]; then
         if [[ "$arg" == "26b" || "$arg" == "26B" ]]; then
             echo "ERROR: This project is 31B-only."
@@ -113,6 +117,18 @@ stop_server_on_port() {
         sleep 1
     fi
 }
+
+# Ports are fixed for this stack. stop/restart always clear both so a leftover
+# engine on :8090 (proxy mode) cannot survive a --no-proxy stop.
+PUBLIC_PORT=8080
+MLX_PORT=8090
+
+if [ "$DO_STOP" = true ] && [ "$DO_RESTART" = false ]; then
+    stop_server_on_port "$PUBLIC_PORT"
+    stop_server_on_port "$MLX_PORT"
+    echo "→ Stopped (ports ${PUBLIC_PORT}/${MLX_PORT})"
+    exit 0
+fi
 
 # Two-pass: pick up value-bearing args (--tool-call-parser X, --reasoning-parser X, etc.)
 i=0
@@ -179,10 +195,8 @@ MLX_PORT=8090
 [ "$USE_PROXY" = false ] && MLX_PORT=$PUBLIC_PORT
 
 if [ "$DO_RESTART" = true ]; then
-    stop_server_on_port "$PUBLIC_PORT"
-    if [ "$USE_PROXY" = true ] && [ "$MLX_PORT" != "$PUBLIC_PORT" ]; then
-        stop_server_on_port "$MLX_PORT"
-    fi
+    stop_server_on_port 8080
+    stop_server_on_port 8090
     echo ""
 fi
 
@@ -344,7 +358,7 @@ if [ "$USE_PROXY" = true ]; then
         if ! kill -0 "$MLX_PID" 2>/dev/null; then
             echo "ERROR: vllm-mlx process exited during startup."
             if lsof -ti ":$MLX_PORT" >/dev/null 2>&1; then
-                echo "       Port $MLX_PORT is in use. Run: ./2_start_mlx.sh restart"
+                echo "       Port $MLX_PORT is in use. Run: ./2_start_mlx.sh restart  (or: ./2_start_mlx.sh stop)"
             fi
             echo "       On 31B, exit 134 / Metal OOM is common if another MLX server is running."
             cleanup
@@ -413,7 +427,7 @@ else
         if ! kill -0 "$MLX_PID" 2>/dev/null; then
             echo "ERROR: vllm-mlx process exited during startup."
             if lsof -ti ":$PUBLIC_PORT" >/dev/null 2>&1; then
-                echo "       Port $PUBLIC_PORT is in use. Run: ./2_start_mlx.sh restart"
+                echo "       Port $PUBLIC_PORT is in use. Run: ./2_start_mlx.sh restart  (or: ./2_start_mlx.sh stop)"
             fi
             echo "       Never run sibling Gemma servers on :8080 at the same time."
             cleanup
