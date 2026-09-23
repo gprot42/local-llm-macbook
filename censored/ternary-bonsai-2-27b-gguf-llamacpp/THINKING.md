@@ -6,7 +6,7 @@ Bonsai 2 27B is a **reasoning model**: it can "think" (emit a hidden chain of th
 
 | You want | Do this |
 |---|---|
-| Think for this OpenCode session | `/models` → **Ternary Bonsai 2 27B — thinking (1024‑token budget)** (`bonsai/ternary-bonsai-2-27b-think`) |
+| Think for this OpenCode session | `/models` → **Ternary Bonsai 2 27B — thinking (medium effort, 1024‑token budget)** (`bonsai/ternary-bonsai-2-27b-think`) |
 | Back to fast / no thinking | `/models` → `bonsai/ternary-bonsai-2-27b` (the default) |
 | Think for everything, server‑wide | `./2_start_llama.sh --think` (2048 budget) or `--think-budget N` |
 | Think from your own code | add `chat_template_kwargs: {"enable_thinking": true}` and `thinking_budget_tokens: N` to the request |
@@ -18,7 +18,7 @@ No server restart is needed for the OpenCode switch; the two entries point at th
 ### In OpenCode (per session)
 
 1. Restart OpenCode once after installing the config (`./install-opencode-json.sh`) so it sees both entries.
-2. Type `/models` and pick **Ternary Bonsai 2 27B — thinking (1024‑token budget)**.
+2. Type `/models` and pick **Ternary Bonsai 2 27B — thinking (medium effort, 1024‑token budget)**.
 3. The model's thinking now renders in the UI as reasoning blocks, then the answer or tool call follows.
 
 Switch back with `/models` → `bonsai/ternary-bonsai-2-27b`.
@@ -26,12 +26,14 @@ Switch back with `/models` → `bonsai/ternary-bonsai-2-27b`.
 Under the hood the `-think` entry in [`opencode.json`](opencode.json) is the same model with these `options`, which OpenCode passes verbatim into every request:
 
 ```json
-"chat_template_kwargs": { "enable_thinking": true },
+"chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "medium" },
 "thinking_budget_tokens": 1024,
 "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0, "presence_penalty": 0
 ```
 
-`enable_thinking` switches the model's thinking on; `thinking_budget_tokens` is PrismML's per‑request cap (their llama.cpp fork honors it — upstream `reasoning_budget` is server‑wide only); the sampling values are the model card's thinking‑mode preset. `"reasoning": true` on the entry tells OpenCode to render the reasoning. Change the budget by editing that number and re‑running `./install-opencode-json.sh`.
+`enable_thinking` switches the model's thinking on; `reasoning_effort: medium` picks the shorter of the model's two effort levels (`xhigh` is the default, `low` is unsupported); `thinking_budget_tokens` is PrismML's per‑request cap (their llama.cpp fork honors it — upstream `reasoning_budget` is server‑wide only); the sampling values are the model card's thinking‑mode preset. `"reasoning": true` on the entry tells OpenCode to render the reasoning. Change the budget by editing that number and re‑running `./install-opencode-json.sh`.
+
+**Why these exact values:** in a controlled A/B on an identical "build a Breakout game" task (see MODIFICATIONS.md), this recipe (thinking + `reasoning_effort: medium` + the card's thinking sampling + verbatim tool output) produced a structurally complete game and drove the model to *write its own headless test harness*, where the fast reasoning‑off default produced a visually broken one. The cost: ~30 min and ~7× the output tokens, and it still shipped one control bug — so it is the entry for a hard turn, not the everyday default.
 
 ### Server‑wide
 

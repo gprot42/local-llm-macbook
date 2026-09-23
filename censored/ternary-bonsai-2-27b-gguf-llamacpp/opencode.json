@@ -85,10 +85,10 @@
           }
         },
         "ternary-bonsai-2-27b-think": {
-          "name": "Ternary Bonsai 2 27B — thinking (1024-token budget)",
+          "name": "Ternary Bonsai 2 27B — thinking (medium effort, 1024-token budget)",
           "reasoning": true,
           "tool_call": true,
-          "temperature": false,
+          "temperature": true,
           "limit": {
             "context": 49152,
             "output": 16384
@@ -98,7 +98,7 @@
             "output": ["text"]
           },
           "options": {
-            "chat_template_kwargs": { "enable_thinking": true },
+            "chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "medium" },
             "thinking_budget_tokens": 1024,
             "temperature": 1.0,
             "top_p": 0.95,
