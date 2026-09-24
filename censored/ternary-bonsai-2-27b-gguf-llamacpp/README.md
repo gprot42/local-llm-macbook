@@ -9,6 +9,17 @@ Local **Ternary Bonsai 2 27B** ([prism-ml](https://huggingface.co/prism-ml/Terna
 | **Weights** | [`prism-ml/Ternary-Bonsai-2-27B-gguf`](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf) · `PQ2_0` (7.21 GB) + `mmproj-Q8_0` (0.63 GB) |
 | **Engine** | PrismML's [llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp) (Metal), `--jinja` tool calling, single slot + 24 GiB RAM prompt cache |
 
+## When to use it (the honest takeaway)
+
+The harness is solid and the model is not broken — but its **code quality is inconsistent run to run**. The same prompt can produce a clean result one time and a buggy one the next; a [lever-isolation factorial](MODIFICATIONS.md) found this is **luck + task difficulty, not something you can tune** (thinking mode and sampling knobs did *not* reliably improve quality — mostly just slower). What actually moves the needle is scope:
+
+- ✅ **Good for small, well-scoped tasks** — one screen, one feature, a focused bug fix. A small well-known game (Breakout) worked in ~all of 8 runs.
+- ⚠️ **Review its output.** It can verify code *runs*, not that it's *correct*. Assume a quick check or one re-run for anything that matters.
+- ↔️ **Big one-shot files → use the GLM stack instead** (faster; long single generations are this model's weakest case, e.g. the Mario-Kart attempt fell apart).
+- 🧠 **Keep reasoning off** (the default) for everyday work; switch to the `-think` model only for a genuinely hard debugging/design turn.
+
+Don't chase more config to fix quality — work around it with task scope and a quick review.
+
 ## Why the fork (not stock MLX/Ollama)
 
 Bonsai 2 packs are stored in a **rotated basis**: each weight matrix is transformed by a blockwise Hadamard rotation before ternary assignment, and the runtime must apply the matching transform to activations. The pack declares `model_type: prism_hadamard_qwen35` / `requires_runtime: true`.
