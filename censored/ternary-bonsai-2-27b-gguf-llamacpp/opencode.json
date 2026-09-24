@@ -98,7 +98,7 @@
             "output": ["text"]
           },
           "options": {
-            "chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "medium" },
+            "chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "medium", "preserve_thinking": false },
             "thinking_budget_tokens": 1024,
             "temperature": 1.0,
             "top_p": 0.95,

@@ -26,10 +26,12 @@ Switch back with `/models` → `bonsai/ternary-bonsai-2-27b`.
 Under the hood the `-think` entry in [`opencode.json`](opencode.json) is the same model with these `options`, which OpenCode passes verbatim into every request:
 
 ```json
-"chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "medium" },
+"chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "medium", "preserve_thinking": false },
 "thinking_budget_tokens": 1024,
 "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0, "presence_penalty": 0
 ```
+
+`preserve_thinking: false` drops earlier turns' `reasoning_content` from the prompt (the model still thinks fresh each turn) — a lever-isolation factorial (below) showed replaying it back costs ~3× the time/tokens/tool-calls for no quality gain.
 
 `enable_thinking` switches the model's thinking on; `reasoning_effort: medium` picks the shorter of the model's two effort levels (`xhigh` is the default, `low` is unsupported); `thinking_budget_tokens` is PrismML's per‑request cap (their llama.cpp fork honors it — upstream `reasoning_budget` is server‑wide only); the sampling values are the model card's thinking‑mode preset. `"reasoning": true` on the entry tells OpenCode to render the reasoning. Change the budget by editing that number and re‑running `./install-opencode-json.sh`.
 
