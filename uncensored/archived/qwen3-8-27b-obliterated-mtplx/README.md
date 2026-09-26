@@ -345,7 +345,7 @@ curl -s http://localhost:8768/v1/chat/completions \
 
 ## Comparison
 
-| | `qwen3-8-27b-coder-mtplx` (aligned) | `qwen3-8-27b-obliterated-mtplx` (this) |
+| | `archive/qwen3-8-27b-coder-mtplx` (aligned) | `qwen3-8-27b-obliterated-mtplx` (this) |
 |---|---|---|
 | Weights | Qwen / mlx-community / Youssofal | [OBLITERATUS/Qwen3.8-27B-OBLITERATED](https://huggingface.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED) |
 | Default port | **8766** | **8768** (proxy) / **8767** (engine) |

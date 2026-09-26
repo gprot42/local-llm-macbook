@@ -8,7 +8,7 @@ served locally on Apple Silicon with [mtplx](https://github.com/youssofal/MTPLX)
 **Engine `:8767`**, **Kilo/harness proxy `:8768`** (beside aligned Qwen3.8 `:8766` and Qwen3.6 `:8765`).
 Do **not** load two large models at once on ≤128 GB unified memory.
 
-Copied from [`../../censored/qwen3-8-27b-coder-mtplx/`](../../censored/qwen3-8-27b-coder-mtplx/)
+Copied from [`../../censored/archive/qwen3-8-27b-coder-mtplx/`](../../censored/archive/qwen3-8-27b-coder-mtplx/)
 and retargeted at the OBLITERATUS Hub pack.
 
 > **Do not `mtplx pull OBLITERATUS/Qwen3.8-27B-OBLITERATED`.** That repo is a

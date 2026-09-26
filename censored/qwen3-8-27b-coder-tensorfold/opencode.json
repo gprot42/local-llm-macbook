@@ -1,0 +1,33 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "tensorfold/qwen3.8-27b-tensorfold",
+  "small_model": "tensorfold/qwen3.8-27b-tensorfold",
+  "provider": {
+    "tensorfold": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "TensorFold Qwen3.8 (local)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8769/v1",
+        "apiKey": "local",
+        "timeout": false,
+        "chunkTimeout": 900000
+      },
+      "models": {
+        "qwen3.8-27b-tensorfold": {
+          "name": "Qwen3.8 27B TensorFold (DFlash2, thinking off)",
+          "reasoning": false,
+          "tool_call": true,
+          "temperature": false,
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        }
+      }
+    }
+  }
+}

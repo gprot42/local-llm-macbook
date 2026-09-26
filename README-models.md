@@ -13,7 +13,8 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | Stack | Folder | Input | Notes |
 |-------|--------|-------|-------|
 | **Qwen 3.6 27B mtplx** | `censored/qwen3-6-27b-coder-mtplx/` | **Text only** | Coding default; native MTP heads |
-| **Qwen 3.8 27B mtplx** | `censored/qwen3-8-27b-coder-mtplx/` | **Text only** | Next 27B; harness ready; weights when published |
+| **Qwen 3.8 27B mtplx** | `censored/archive/qwen3-8-27b-coder-mtplx/` | **Text only** | Next 27B; harness ready; weights when published |
+| **Qwen 3.8 27B TensorFold** | `censored/qwen3-8-27b-coder-tensorfold/` | **Text only** | Same 27B family via TensorFold; Vontra MLX 4-bit + DFlash2; `:8769` |
 | **Qwen 3.8 27B OBLITERATED mtplx** | `uncensored/archived/qwen3-8-27b-obliterated-mtplx/` | **Text only** | Archived (unstable in Kilo loops); hardened Kilo proxy on :8768; mlx-4bit ~14 GB |
 | **Muse Glimmer 30B** | `censored/muse-glimmer-30b-mlx/` | **Text + image** | Meta MSL agentic 30B; mlx-vlm + official DFlash |
 | **Ternary Bonsai 2 27B** | `censored/ternary-bonsai-2-27b-gguf-llamacpp/` | **Text + image** | PrismML ternary (~1.72 bit) Qwen3.8 27B; llama.cpp fork, `:8089` |
@@ -62,6 +63,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 | You want… | Prefer | Avoid |
 |-----------|--------|-------|
 | Snappy Kilo tool loops | **Qwen 3.6 27B mtplx** (`:8765`); try **Qwen 3.8** (`:8766`) when weights land | DeepSeek / Qwen3.5-122B for “feel fast” |
+| Qwen 3.8 27B, TensorFold decode | **Qwen 3.8 TensorFold** (`:8769`, DFlash2) | Loading it next to mtplx Qwen 3.8; image input (API is text) |
 | Aligned local agents + screenshots | **Muse Glimmer 30B** (`:8087`) | Ultra-snappy loops (thinking is always on) |
 | Hard multi-file coding quality | **DeepSeek V4 Flash ds4** (`:8083`) | ≤64 GB machines; co-loading another 70+ GB model |
 | Uncensored chat (Gemma + vision) | **Gemma Heretic** or **JANG CRACK** (`:8080`) | Unattended huge agent refactors |
@@ -104,7 +106,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 
 ---
 
-### Qwen 3.8 27B — mtplx (`censored/qwen3-8-27b-coder-mtplx/`)
+### Qwen 3.8 27B — mtplx (`censored/archive/qwen3-8-27b-coder-mtplx/`)
 
 | | |
 |--|--|
@@ -123,6 +125,30 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 
 - Machines that still only have Qwen3.6 weights (use the 3.6 stack)
 - Co-loading with Qwen 3.6 on tight RAM
+
+---
+
+### Qwen 3.8 27B — TensorFold (`censored/qwen3-8-27b-coder-tensorfold/`)
+
+| | |
+|--|--|
+| **Role** | 🟢 **Qwen 3.8 27B coding** on TensorFold (DFlash2 drafts, exact verify) |
+| **Modality** | **Text only** (checkpoint has a vision tower; the API does not take images) |
+| **Engine / size** | TensorFold · `Vontra/Qwen3.8-27B-MLX-4bit` ~16.1 GB + drafter `z-lab/Qwen3.8-27B-DFlash2` ~3.8 GB |
+| **API** | `:8769/v1` · Kilo: `tensorfold-qwen38/qwen3.8-27b-tensorfold` |
+| **Harness** | `test_harness.py` (`--gate` on post-start) |
+| **Sampling** | `temperature=0.6`, `top_p=0.95`, `top_k=20`, thinking off (`--thinking` to enable) |
+
+**Good for**
+
+- The same Kilo tool loop as Qwen 3.8 mtplx, on the checkpoint TensorFold actually tests
+- M5 lane kernels (this repo's Mac). M1–M4 still run, through the row-exact matvec
+
+**Not good for**
+
+- Image input
+- The mtplx / mlx-community quant (different conversion; not this folder's default)
+- Co-loading with Qwen 3.6 or Qwen 3.8 mtplx on 128 GB
 
 ---
 
@@ -318,7 +344,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 **Not good for**
 
 - Daily Kilo agent use (**unstable**: session-in-flight, 10+ min Thinking, recap loops)
-- Aligned / refusal-preserving coding (use `censored/qwen3-8-27b-coder-mtplx/`)
+- Aligned / refusal-preserving coding (use `censored/archive/qwen3-8-27b-coder-mtplx/` or `censored/qwen3-8-27b-coder-tensorfold/`)
 - Pulling the Hub repo as a whole (GGUF + leftover shards + bf16 — hundreds of GB)
 - Using the Aug-20 Hub `mlx-4bit/` snapshot (V1; Hub deleted it — run `./1_setup_download.sh --force`)
 - Co-loading aligned Qwen 3.8 on tight RAM (same size class)

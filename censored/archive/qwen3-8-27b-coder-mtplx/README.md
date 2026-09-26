@@ -12,7 +12,7 @@ OpenAI-compatible API for Kilo Code.
 > venv + mtplx and **preflights HF** so a missing repo does not look like a token error
 > (exit **2** = deps OK, weights not published). Pass `QWEN38_HF_MODEL` or a raw `org/repo`
 > once a quant is live. Until then, keep using
-> [`../qwen3-6-27b-coder-mtplx/`](../qwen3-6-27b-coder-mtplx/).
+> [`../../qwen3-6-27b-coder-mtplx/`](../../qwen3-6-27b-coder-mtplx/).
 
 ## Quick start
 
@@ -148,6 +148,9 @@ curl -s http://localhost:8766/v1/chat/completions \
 
 Both can run side-by-side on different ports — do **not** load two large models at once on
 ≤128 GB unified memory.
+
+TensorFold sibling (same model family, Vontra MLX 4-bit + DFlash2, port **8769**):
+[`../qwen3-8-27b-coder-tensorfold/`](../qwen3-8-27b-coder-tensorfold/).
 
 ## Troubleshooting
 
