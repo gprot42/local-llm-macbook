@@ -138,6 +138,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 | **API** | `:8769/v1` · Kilo: `tensorfold-qwen38/qwen3.8-27b-tensorfold` |
 | **Harness** | `test_harness.py` (`--gate` on post-start) |
 | **Sampling** | `temperature=0.6`, `top_p=0.95`, `top_k=20`, thinking off (`--thinking` to enable) |
+| **Context** | 262144 (checkpoint max). Prompt plus reply. |
 
 **Good for**
 

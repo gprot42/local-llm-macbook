@@ -60,7 +60,7 @@
           "name": "Qwen3.8 27B — TensorFold (coding / agents)",
           "tool_call": true,
           "limit": {
-            "context": 131072,
+            "context": 262144,
             "output": 32768
           }
         }

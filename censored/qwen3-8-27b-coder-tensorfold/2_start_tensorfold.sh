@@ -11,7 +11,7 @@
 #
 # Options:
 #   --port PORT       Listen port (default 8769)
-#   --context N       Prompt + reply cap (default 131072; 0 = model max)
+#   --context N       Prompt + reply cap (default 262144, the checkpoint max; 0 = model max)
 #   --model REPO      Hugging Face repo (default from .tensorfold_config)
 #   --thinking        Open the think block (Qwen3.8 reasoning-effort medium)
 #   --no-thinking     Skip the think block (default)
@@ -161,7 +161,7 @@ if [[ -n "${MODEL_OVERRIDE}" ]]; then
     HF_MODEL="${MODEL_OVERRIDE}"
 fi
 MODEL_ALIAS="${MODEL_ALIAS:-qwen3.8-27b-tensorfold}"
-CONTEXT="${CONTEXT:-131072}"
+CONTEXT="${CONTEXT:-262144}"
 if [[ -n "${CLI_CONTEXT}" ]]; then
     CONTEXT="${CLI_CONTEXT}"
 fi

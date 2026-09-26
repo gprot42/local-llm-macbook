@@ -78,10 +78,10 @@ Thinking is **off** (`--no-thinking`) so tool loops are not wrapped in a think b
 ./2_start_tensorfold.sh --thinking
 ```
 
-Context cap is 131072 tokens (prompt + reply). The checkpoint advertises 262144. Raise it only if unified memory can hold the cache:
+Context cap is 262144 tokens (prompt + reply), the checkpoint maximum. A 131072 cap rejected a 132953-token agent prompt. At a full 262144-token window the 16 attention layers need about 16 GiB of KV cache, which fits this 128 GB Mac on top of the ~20 GB of weights. Cap it lower with:
 
 ```bash
-./2_start_tensorfold.sh --context 262144
+./2_start_tensorfold.sh --context 131072
 ```
 
 ## Harness
