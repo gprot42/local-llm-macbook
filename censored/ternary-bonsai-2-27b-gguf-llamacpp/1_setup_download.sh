@@ -17,7 +17,7 @@ ENGINE_DIR="${SCRIPT_DIR}/engine"          # PrismML llama.cpp fork checkout + b
 MODELS_DIR="${SCRIPT_DIR}/models"
 VENV_DIR="${SCRIPT_DIR}/venv"              # just for huggingface_hub (downloads)
 FORK_URL="https://github.com/PrismML-Eng/llama.cpp.git"
-FORK_REF="${BONSAI_FORK_REF:-prism-b10683-d8f26ee}"   # matches the PQ2_0 kernels
+FORK_REF="${BONSAI_FORK_REF:-prism-b10743-adfffbe}"   # matches the PQ2_0 kernels (was prism-b10683-d8f26ee)
 HF_REPO="prism-ml/Ternary-Bonsai-2-27B-gguf"
 # PQ2_0 (7.21 GB, fork group-128) + Q8_0 vision projector (0.63 GB).
 GGUF_GLOB="Ternary-Bonsai-2-27B-PQ2_0.gguf"

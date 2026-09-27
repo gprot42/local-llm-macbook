@@ -88,7 +88,12 @@ fi
 # shellcheck source=/dev/null
 source "${VENV_DIR}/bin/activate"
 python -m pip install --upgrade pip
-python -m pip install "git+https://github.com/ashhart/TensorFold.git"
+# Pinned to a verified-good release rather than tracking the default branch:
+# 0.3.4 shipped a prompt-processing regression that 0.3.4.1 fixed, so an
+# unpinned install could pick up a bad pre-release. Bump this after verifying a
+# newer tag (draft==serial byte-exact + prefill speed) — see TF_VERSION below.
+TF_VERSION="${TF_VERSION:-v0.3.4.1}"
+python -m pip install --upgrade "git+https://github.com/ashhart/TensorFold.git@${TF_VERSION}"
 
 echo "→ $(tensorfold --version)"
 echo ""
