@@ -52,26 +52,46 @@ MAX_TOOL_ROUNDS = int(os.environ.get("LOOP_MAX_ROUNDS", "200"))
 # legitimate re-verification, not a loop.
 STATE_CHANGING = {"write", "edit", "patch", "multiedit", "apply_patch"}
 
-NUDGE_SAME_TEXT = (
-    "\n\n[Harness] This exact command has now run {n} times in this turn and "
-    "returned this same result each time. Running it again will return the "
-    "same thing. Do not run it again: use this result, try a different "
-    "command, or report what it shows."
+DIRECTIVE_AT = 3    # from the 3rd repeat, also inject a user-role directive
+OUTPUT_QUOTE = 600  # chars of the original output quoted inside a refusal
+
+# A repeat's result is REPLACED with a refusal (an appended note was ignored by
+# a model that ran the same grep five times in two minutes). The original
+# output is quoted inside it, so nothing is lost.
+REFUSAL_TEXT = (
+    "[Harness] REFUSED: this exact command already ran {n} times in this turn "
+    "with identical output, so it was not run again. That output is final and "
+    "is repeated here:\n\n{output}\n\n"
+    "Do not run this command again. Use this output, run a different command, "
+    "edit a file, or report what it shows."
 )
-NUDGE_CYCLE_TEXT = (
-    "\n\n[Harness] This exact command has now been issued {n} times in this "
-    "turn. That is a loop. Do not issue it again: change the approach, or "
-    "report what this result shows."
+CYCLE_REFUSAL_TEXT = (
+    "[Harness] REFUSED: this exact command has now been issued {n} times in "
+    "this turn. Its latest output is:\n\n{output}\n\n"
+    "Do not issue it again. Change the approach, or report what this shows."
 )
+# From the 3rd repeat a user-role message is added as well: the strongest
+# signal a chat model has, and the last step before the turn is ended.
+DIRECTIVE_TEXT = (
+    "[Harness] Stop re-running that command. It has been run {n} times with the "
+    "same result, which is shown above and will not change. Take a different "
+    "action now: run a different command, edit a file, or report what you found."
+)
+# The stop messages are read by the USER (they end the turn), so they say
+# what the model is stuck on and what to type instead of "continue".
 STOP_TEXT = (
-    "[Harness] Stopped: the same tool call already ran "
-    "{n} times with the same result. That result is above. "
-    "Do not run it again. Change the approach, or report what it printed."
+    "[Harness] Stopped: the model is stuck re-running the same command "
+    "({n} times, identical output, ignored two corrections):\n\n"
+    "    {command}\n\n"
+    "Replying \"continue\" will repeat it. Reply with a specific instruction "
+    "instead: what to run, which file to look at, or what to do with that output."
 )
 CYCLE_TEXT = (
-    "[Harness] Stopped: the same tool call was issued {n} times this turn, "
-    "mixed with other calls. That is a loop. Change the approach, or report "
-    "what the last result printed."
+    "[Harness] Stopped: the model keeps issuing the same command "
+    "({n} times this turn, mixed with other calls, ignored the corrections):\n\n"
+    "    {command}\n\n"
+    "Replying \"continue\" will likely repeat it. Reply with a specific "
+    "instruction instead."
 )
 CAP_TEXT = (
     "[Harness] Stopped: this turn already ran {n} tool calls without "
@@ -134,9 +154,13 @@ def _rounds_after_last_user(messages: list[dict[str, Any]]) -> list[tuple[str, s
     return rounds
 
 
-def decide(messages: list[dict[str, Any]]) -> tuple[str | None, str | None]:
-    """("stop", text) to end the turn, ("nudge", text) to annotate the latest
-    tool result and forward, or (None, None) to forward untouched.
+def decide(messages: list[dict[str, Any]]) -> tuple[str | None, str | None, str | None]:
+    """(action, text, directive).
+
+    ("stop", text, None): end the turn with `text` (the model is not called).
+    ("nudge", refusal, directive): replace the latest tool result with
+    `refusal`, append a user-role `directive` when not None, then forward.
+    (None, None, None): forward untouched.
 
     Only the rounds after the latest user message count, and a nudge or stop
     is issued only when the offending call is the latest round — a turn that
@@ -145,40 +169,60 @@ def decide(messages: list[dict[str, Any]]) -> tuple[str | None, str | None]:
 
     rounds = _rounds_after_last_user(messages)
     if len(rounds) >= MAX_TOOL_ROUNDS:
-        return "stop", CAP_TEXT.format(n=len(rounds))
+        return "stop", CAP_TEXT.format(n=len(rounds)), None
     if not rounds:
-        return None, None
+        return None, None, None
     by_sig: dict[str, list[int]] = {}
     for index, (sig, _) in enumerate(rounds):
         by_sig.setdefault(sig, []).append(index)
-    indices = by_sig[rounds[-1][0]]
+    sig, output = rounds[-1]
+    indices = by_sig[sig]
     n = len(indices)
+    quoted = output[:OUTPUT_QUOTE] + (" …" if len(output) > OUTPUT_QUOTE else "")
+    directive = DIRECTIVE_TEXT.format(n=n) if n >= DIRECTIVE_AT else None
     if n >= NUDGE_SAME:
         prev, last = indices[-2], indices[-1]
         same_result = rounds[prev][1] == rounds[last][1]
         changed_between = any(_tool_name(rounds[k][0]) in STATE_CHANGING for k in range(prev + 1, last))
         if same_result and not changed_between:
             if n >= STOP_SAME:
-                return "stop", STOP_TEXT.format(n=n)
-            return "nudge", NUDGE_SAME_TEXT.format(n=n)
+                return "stop", STOP_TEXT.format(n=n, command=_display_command(sig)), None
+            return "nudge", REFUSAL_TEXT.format(n=n, output=quoted), directive
     if n >= STOP_CYCLE:
-        return "stop", CYCLE_TEXT.format(n=n)
+        return "stop", CYCLE_TEXT.format(n=n, command=_display_command(sig)), None
     if n >= NUDGE_CYCLE:
-        return "nudge", NUDGE_CYCLE_TEXT.format(n=n)
-    return None, None
+        return "nudge", CYCLE_REFUSAL_TEXT.format(n=n, output=quoted), directive
+    return None, None, None
 
 
-def inject_nudge(messages: list[dict[str, Any]], text: str) -> bool:
-    """Append the nudge to the latest tool result, so the model reads it next."""
+def _display_command(sig: str) -> str:
+    """The command / path inside a signature, for the user-facing stop text."""
+
+    _, _, args = sig.partition("\n")
+    try:
+        parsed = json.loads(args)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        for key in ("command", "filePath", "pattern", "path"):
+            if parsed.get(key):
+                args = str(parsed[key])
+                break
+    args = " ".join(args.split())
+    return args if len(args) <= 200 else args[:200] + " …"
+
+
+def apply_nudge(messages: list[dict[str, Any]], refusal: str, directive: str | None) -> bool:
+    """Replace the latest tool result with the refusal; add the directive as a
+    user turn when given. Only the forwarded copy changes — the client's own
+    transcript keeps the real output."""
 
     for message in reversed(messages):
         if not isinstance(message, dict) or message.get("role") != "tool":
             continue
-        content = message.get("content")
-        if isinstance(content, list):
-            content.append({"type": "text", "text": text})
-        else:
-            message["content"] = ("" if content is None else str(content)) + text
+        message["content"] = refusal
+        if directive:
+            messages.append({"role": "user", "content": directive})
         return True
     return False
 
@@ -241,13 +285,13 @@ class Proxy(BaseHTTPRequestHandler):
                 payload = None
             if isinstance(payload, dict):
                 messages = payload.get("messages") or []
-                action, text = decide(messages)
+                action, text, directive = decide(messages)
                 if action == "stop":
                     self._send_stop(payload, text or "")
                     return
-                if action == "nudge" and text and inject_nudge(messages, text):
+                if action == "nudge" and text and apply_nudge(messages, text, directive):
                     body = json.dumps(payload).encode()
-                    self.log_message("nudged: %s", text.strip()[len("[Harness] "):86])
+                    self.log_message("refused repeat%s: %s", " + directive" if directive else "", text[len("[Harness] "):80])
         self._forward(body)
 
     def _send_stop(self, payload: dict[str, Any], reason: str) -> None:
@@ -361,13 +405,24 @@ def _self_test() -> None:
         call("bash", check, "c2"), result("c2", ""),
     ]
     assert action(looping) == "nudge", "identical repeat with no file change must nudge"
-    # The nudge lands on the latest tool result, for string and part-list content.
+    # 2nd repeat: the duplicate's result is replaced by a refusal quoting the
+    # original output; no user directive yet.
     msgs = repeated(2)
-    _, text = decide(msgs)
-    assert text and inject_nudge(msgs, text) and msgs[-1]["content"].endswith(text)
-    as_parts = repeated(2)
-    as_parts[-1]["content"] = [{"type": "text", "text": "total symbols: 268"}]
-    assert inject_nudge(as_parts, text) and as_parts[-1]["content"][-1]["text"] == text
+    _, refusal, directive = decide(msgs)
+    assert refusal and refusal.startswith("[Harness] REFUSED") and "total symbols: 268" in refusal
+    assert directive is None
+    assert apply_nudge(msgs, refusal, directive)
+    assert msgs[-1]["role"] == "tool" and msgs[-1]["content"] == refusal
+    # 3rd repeat: refusal plus a user-role directive appended after it.
+    msgs = repeated(3)
+    _, refusal, directive = decide(msgs)
+    assert directive and directive.startswith("[Harness] Stop re-running")
+    assert apply_nudge(msgs, refusal, directive)
+    assert msgs[-2]["role"] == "tool" and msgs[-2]["content"] == refusal
+    assert msgs[-1] == {"role": "user", "content": directive}
+    # The stop text names the command the model is stuck on, for the user.
+    _, stop_text, _ = decide(repeated(4))
+    assert "python3 scan.py" in stop_text and '"continue" will repeat it' in stop_text
     _stream_self_test()
     print("loop_proxy self-test ok")
 
