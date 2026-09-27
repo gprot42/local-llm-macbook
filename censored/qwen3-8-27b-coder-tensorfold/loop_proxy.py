@@ -10,7 +10,10 @@ the latest user message, refuses to call the model when:
   between (nothing changed, so repeating it cannot help; an edit between two
   identical `node --check` runs is a normal verify loop and is forwarded)
 - the same tool call has been issued three times, even with different output
-- the turn has already run 48 tool calls
+- the turn has already run 200 tool calls (--max-rounds / LOOP_MAX_ROUNDS).
+  This is a backstop for a turn that never repeats itself and never finishes;
+  it must sit far above real work — a code-exploration turn of 48 distinct
+  greps and reads was cut off when the cap was 48.
 
 A new user message starts the count over. Upstream bytes are relayed as they
 arrive (read1), so streamed tokens reach the client immediately.
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -31,7 +35,7 @@ import uuid
 
 STOP_AFTER = 2
 CYCLE_REPEAT = 3
-MAX_TOOL_ROUNDS = 48
+MAX_TOOL_ROUNDS = int(os.environ.get("LOOP_MAX_ROUNDS", "200"))
 # Tools that change files. An identical call repeated after one of these is a
 # legitimate re-verification, not a loop.
 STATE_CHANGING = {"write", "edit", "patch", "multiedit", "apply_patch"}
@@ -48,7 +52,9 @@ CYCLE_TEXT = (
 )
 CAP_TEXT = (
     "[Harness] Stopped: this turn already ran {n} tool calls without "
-    "finishing. Report what is done and what is blocked. Do not call another tool."
+    "finishing. Report what is done and what is blocked. Do not call another tool. "
+    "(If the work really is this long, reply to continue — the count resets on a "
+    "new message — or start the proxy with a higher --max-rounds.)"
 )
 
 
@@ -206,7 +212,7 @@ class Proxy(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
         self.wfile.flush()
-        self.log_message("stopped repeated tool call (%d bytes)", len(raw))
+        self.log_message("stopped turn: %s", reason[len("[Harness] Stopped: "):76])
 
     def _forward(self, body: bytes) -> None:
         headers = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "content-length", "transfer-encoding")}
@@ -353,11 +359,16 @@ def _stream_self_test() -> None:
 
 
 def main() -> None:
+    global MAX_TOOL_ROUNDS  # declared first: the name is read below before it may be assigned
     parser = argparse.ArgumentParser()
     parser.add_argument("--listen", default="8769")
     parser.add_argument("--upstream", default="127.0.0.1:8779")
+    parser.add_argument("--max-rounds", type=int, default=None,
+                        help=f"tool calls allowed per user turn (default {MAX_TOOL_ROUNDS}; env LOOP_MAX_ROUNDS)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+    if args.max_rounds is not None:
+        MAX_TOOL_ROUNDS = args.max_rounds
     if args.self_test:
         _self_test()
         return

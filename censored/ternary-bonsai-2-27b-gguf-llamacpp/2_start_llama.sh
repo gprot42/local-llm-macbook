@@ -33,8 +33,9 @@ PORT=8089
 # loop_proxy.py owns the public port and forwards to llama-server on the engine
 # port. It ends a turn, without calling the model, when the same tool call has
 # returned the same result twice with no write/edit in between, when one call
-# has been issued three times, or after 48 tool calls — a prompt rule alone did
-# not hold (one session repeated a call 782 times). Streamed tokens pass through.
+# has been issued three times, or after 200 tool calls (LOOP_MAX_ROUNDS) — a
+# prompt rule alone did not hold (one session repeated a call 782 times).
+# Streamed tokens pass through.
 ENGINE_PORT="${BONSAI_ENGINE_PORT:-8099}"
 PROXY="${SCRIPT_DIR}/loop_proxy.py"
 CTX="${BONSAI_CTX:-81920}"
