@@ -2,8 +2,9 @@
 # 2_start_llama.sh — Serve Ternary Bonsai 2 27B (PQ2_0 GGUF) as an OpenAI API
 # via PrismML's llama.cpp fork. Public API on :8089/v1. Run ./1_setup_download.sh first.
 #
-#   --port PORT       Public API port (default: 8089)
-#   --host HOST       Bind host (default: 127.0.0.1)
+#   --port PORT       Public API port — the loop proxy (default: 8089)
+#   --engine-port N   llama-server port behind the proxy (default: 8099; BONSAI_ENGINE_PORT)
+#   --host HOST       Bind host for the public port (default: 127.0.0.1; the engine stays on loopback)
 #   --ctx N           Context window (default: 81920; BONSAI_CTX env also works)
 #   --no-think        Reasoning off (default; BONSAI_THINK=0) — direct tool calls, fastest
 #   --think           Reasoning on, capped at the default 2048-token budget (BONSAI_THINK=1)
@@ -29,6 +30,13 @@ MMPROJ="${MODELS_DIR}/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf"
 ALIAS=ternary-bonsai-2-27b
 HOST=127.0.0.1
 PORT=8089
+# loop_proxy.py owns the public port and forwards to llama-server on the engine
+# port. It ends a turn, without calling the model, when the same tool call has
+# returned the same result twice with no write/edit in between, when one call
+# has been issued three times, or after 48 tool calls — a prompt rule alone did
+# not hold (one session repeated a call 782 times). Streamed tokens pass through.
+ENGINE_PORT="${BONSAI_ENGINE_PORT:-8099}"
+PROXY="${SCRIPT_DIR}/loop_proxy.py"
 CTX="${BONSAI_CTX:-81920}"
 SLOTS="${BONSAI_SLOTS:-1}"
 CACHE_RAM="${BONSAI_CACHE_RAM:-24576}"
@@ -50,6 +58,7 @@ args=("$@")
 for ((i=0; i<${#args[@]}; )); do
   case "${args[$i]}" in
     --port) PORT="${args[$((i+1))]:-$PORT}"; ((i+=2)) ;;
+    --engine-port) ENGINE_PORT="${args[$((i+1))]:-$ENGINE_PORT}"; ((i+=2)) ;;
     --host) HOST="${args[$((i+1))]:-$HOST}"; ((i+=2)) ;;
     --ctx)  CTX="${args[$((i+1))]:-$CTX}"; ((i+=2)) ;;
     --think)    THINK=1; ((i+=1)) ;;
@@ -60,22 +69,26 @@ for ((i=0; i<${#args[@]}; )); do
   esac
 done
 
-port_pid() { lsof -nP -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | head -1; }
+pid_on() { lsof -nP -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
+stop_port() { local pid; pid="$(pid_on "$1" || true)"; [[ -n "${pid}" ]] && { echo "→ stopping :$1 (pid ${pid})"; kill -TERM "${pid}" 2>/dev/null || true; } || echo "→ nothing on :$1"; }
 
 case "${CMD}" in
   status)
-    pid="$(port_pid || true)"
-    [[ -n "${pid}" ]] && { echo "→ serving on :${PORT} (pid ${pid})"; curl -s -m3 "http://${HOST}:${PORT}/v1/models" | python3 -m json.tool 2>/dev/null || true; } || echo "→ not running on :${PORT}"
+    ppid="$(pid_on "${PORT}" || true)"; epid="$(pid_on "${ENGINE_PORT}" || true)"
+    [[ -n "${ppid}" ]] && echo "→ loop proxy on :${PORT} (pid ${ppid})" || echo "→ loop proxy not running on :${PORT}"
+    [[ -n "${epid}" ]] && echo "→ llama-server on :${ENGINE_PORT} (pid ${epid})" || echo "→ llama-server not running on :${ENGINE_PORT}"
+    [[ -n "${ppid}" ]] && curl -s -m3 "http://${HOST}:${PORT}/v1/models" | python3 -m json.tool 2>/dev/null || true
     exit 0 ;;
   stop)
-    pid="$(port_pid || true)"
-    [[ -n "${pid}" ]] && { echo "→ stopping pid ${pid}"; kill -TERM "${pid}" 2>/dev/null || true; } || echo "→ nothing on :${PORT}"
+    stop_port "${PORT}"; stop_port "${ENGINE_PORT}"
     exit 0 ;;
 esac
 
 [[ -x "${BIN}" ]] || { echo "ERROR: llama-server not built — run ./1_setup_download.sh first." >&2; exit 1; }
 [[ -f "${MODEL}" ]] || { echo "ERROR: model missing: ${MODEL} — run ./1_setup_download.sh." >&2; exit 1; }
-[[ -n "$(port_pid || true)" ]] && { echo "→ already serving on :${PORT} (pid $(port_pid))."; exit 0; }
+[[ -f "${PROXY}" ]] || { echo "ERROR: loop proxy missing: ${PROXY}" >&2; exit 1; }
+[[ -n "$(pid_on "${PORT}" || true)" ]] && { echo "→ already serving on :${PORT} (pid $(pid_on "${PORT}")). Use: $0 stop"; exit 0; }
+[[ -n "$(pid_on "${ENGINE_PORT}" || true)" ]] && { echo "→ engine port :${ENGINE_PORT} busy (pid $(pid_on "${ENGINE_PORT}")). Use: $0 stop"; exit 1; }
 
 MMPROJ_ARG=()
 [[ -f "${MMPROJ}" ]] && MMPROJ_ARG=(--mmproj "${MMPROJ}") || echo "→ note: mmproj missing, image input disabled"
@@ -98,24 +111,36 @@ else
   SAMPLING=(--temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty "${PRESENCE}" --repeat-penalty 1.0)
   MODE=off
 fi
-echo "=== Ternary Bonsai 2 27B — llama.cpp fork on http://${HOST}:${PORT}/v1 ==="
+echo "=== Ternary Bonsai 2 27B — llama.cpp fork on http://${HOST}:${PORT}/v1 (engine :${ENGINE_PORT}) ==="
 echo "→ model $(basename "${MODEL}") | ctx ${CTX} | slots ${SLOTS} | cache-ram ${CACHE_RAM} MiB | --jinja tool calling | reasoning ${MODE}"
 LOG="${SCRIPT_DIR}/.bonsai_llama.log"
+PROXY_LOG="${SCRIPT_DIR}/.bonsai_proxy.log"
 # -fa on + default batch (-b 2048 / -ub 512): benchmarked fastest prefill on
 # Metal (larger -ub was slower). No speculative decoding: PrismML measures it as
-# a net loss for chat/agent workloads on Apple Silicon.
+# a net loss for chat/agent workloads on Apple Silicon. The engine binds
+# loopback only; the proxy is what listens on ${HOST}:${PORT}.
 nohup "${BIN}" -m "${MODEL}" "${MMPROJ_ARG[@]}" --alias "${ALIAS}" \
-  --host "${HOST}" --port "${PORT}" -ngl 999 -fa on -c "${CTX}" -np "${SLOTS}" \
+  --host 127.0.0.1 --port "${ENGINE_PORT}" -ngl 999 -fa on -c "${CTX}" -np "${SLOTS}" \
   --cache-ram "${CACHE_RAM}" --jinja "${REASON_ARGS[@]}" "${SAMPLING[@]}" \
   >>"${LOG}" 2>&1 &
 SRV=$!
-echo "→ pid ${SRV}; log ${LOG}; waiting for readiness ..."
+echo "→ engine pid ${SRV}; log ${LOG}; waiting for readiness ..."
+READY=false
 for _ in $(seq 1 180); do
-  if curl -sf -m2 "http://${HOST}:${PORT}/health" >/dev/null 2>&1; then
-    echo "✅ ready — OpenAI API http://${HOST}:${PORT}/v1 (model id: ${ALIAS})"
-    exit 0
-  fi
-  kill -0 "${SRV}" 2>/dev/null || { echo "ERROR: server exited — see ${LOG}"; tail -20 "${LOG}"; exit 1; }
+  if curl -sf -m2 "http://127.0.0.1:${ENGINE_PORT}/health" >/dev/null 2>&1; then READY=true; break; fi
+  kill -0 "${SRV}" 2>/dev/null || { echo "ERROR: engine exited — see ${LOG}"; tail -20 "${LOG}"; exit 1; }
   sleep 1
 done
-echo "ERROR: not ready in 180s — see ${LOG}"; tail -20 "${LOG}"; exit 1
+[[ "${READY}" == true ]] || { echo "ERROR: engine not ready in 180s — see ${LOG}"; tail -20 "${LOG}"; exit 1; }
+
+nohup python3 "${PROXY}" --listen "${HOST}:${PORT}" --upstream "127.0.0.1:${ENGINE_PORT}" >>"${PROXY_LOG}" 2>&1 &
+PXY=$!
+for _ in $(seq 1 20); do
+  if curl -sf -m2 "http://${HOST}:${PORT}/v1/models" >/dev/null 2>&1; then
+    echo "✅ ready — OpenAI API http://${HOST}:${PORT}/v1 (model id: ${ALIAS}) | loop proxy pid ${PXY} -> engine :${ENGINE_PORT}"
+    exit 0
+  fi
+  kill -0 "${PXY}" 2>/dev/null || { echo "ERROR: loop proxy exited — see ${PROXY_LOG}"; tail -20 "${PROXY_LOG}"; stop_port "${ENGINE_PORT}"; exit 1; }
+  sleep 1
+done
+echo "ERROR: loop proxy not answering on :${PORT} — see ${PROXY_LOG}"; tail -20 "${PROXY_LOG}"; stop_port "${ENGINE_PORT}"; exit 1

@@ -3,6 +3,8 @@
 # 2_start_tensorfold.sh — TensorFold OpenAI server for Qwen3.8-27B
 #
 # Listens at http://127.0.0.1:8769/v1
+# The engine itself is on :8779. loop_proxy.py owns :8769 and refuses a tool
+# call that has already returned the same result twice.
 # Port 8769 sits beside Qwen3.8 mtplx on :8766 and Qwen3.6 mtplx on :8765.
 # Do not use :8080: Gemma and Diffusion stacks already share that port.
 #
@@ -30,6 +32,7 @@ VENV_DIR="${SCRIPT_DIR}/venv"
 CONFIG_FILE="${SCRIPT_DIR}/.tensorfold_config"
 
 PORT=8769
+ENGINE_PORT=8779
 CLI_CONTEXT=""
 MODEL_OVERRIDE=""
 THINKING=false
@@ -141,12 +144,9 @@ if [[ "${DO_STATUS}" == true ]]; then
 fi
 
 if [[ "${DO_STOP}" == true ]]; then
-    if [[ -z "$(port_pids)" ]]; then
-        echo "→ No process on port ${PORT}"
-        exit 0
-    fi
     stop_server_on_port "${PORT}"
-    echo "→ Stopped (port ${PORT})"
+    stop_server_on_port "${ENGINE_PORT}"
+    echo "→ Stopped (ports ${PORT} and ${ENGINE_PORT})"
     exit 0
 fi
 
@@ -174,10 +174,9 @@ fi
 source "${VENV_DIR}/bin/activate"
 
 if [[ "${DO_RESTART}" == true ]]; then
-    if [[ -n "$(port_pids)" ]]; then
-        echo "→ restart: clearing port ${PORT} ..."
-        stop_server_on_port "${PORT}"
-    fi
+    echo "→ restart: clearing ports ${PORT} and ${ENGINE_PORT} ..."
+    stop_server_on_port "${PORT}"
+    stop_server_on_port "${ENGINE_PORT}"
 elif [[ -n "$(port_pids)" ]]; then
     if server_healthy; then
         echo "→ TensorFold already healthy on :${PORT}"
@@ -232,13 +231,17 @@ echo ""
 export MLX_USE_DEFAULT_DEVICE=gpu
 
 TF_PID=""
+PROXY_PID=""
 cleanup() {
     echo ""
     echo "→ Shutting down TensorFold ..."
+    [[ -n "${PROXY_PID}" ]] && kill -TERM "${PROXY_PID}" 2>/dev/null || true
     [[ -n "${TF_PID}" ]] && kill -TERM "${TF_PID}" 2>/dev/null || true
     sleep 1
+    [[ -n "${PROXY_PID}" ]] && kill -KILL "${PROXY_PID}" 2>/dev/null || true
     [[ -n "${TF_PID}" ]] && kill -KILL "${TF_PID}" 2>/dev/null || true
     stop_server_on_port "${PORT}" >/dev/null 2>&1 || true
+    stop_server_on_port "${ENGINE_PORT}" >/dev/null 2>&1 || true
     exit 0
 }
 trap cleanup INT TERM HUP
@@ -257,7 +260,7 @@ echo ""
 SERVE_CMD=(
     tensorfold serve "${HF_MODEL}"
     --host 127.0.0.1
-    --port "${PORT}"
+    --port "${ENGINE_PORT}"
     --name "${MODEL_ALIAS}"
     --context "${CONTEXT}"
     --temperature 0.6
@@ -280,11 +283,11 @@ echo ""
 "${SERVE_CMD[@]}" &
 TF_PID=$!
 
-echo "→ Waiting for server (first load can take a few minutes) ..."
+echo "→ Waiting for engine on :${ENGINE_PORT} (first load can take a few minutes) ..."
 READY=false
 for i in $(seq 1 600); do
-    if curl -sf --max-time 1 "http://127.0.0.1:${PORT}/v1/models" >/dev/null 2>&1; then
-        echo "→ Server ready after ${i}s"
+    if curl -sf --max-time 1 "http://127.0.0.1:${ENGINE_PORT}/v1/models" >/dev/null 2>&1; then
+        echo "→ Engine ready after ${i}s"
         READY=true
         break
     fi
@@ -300,6 +303,24 @@ if [[ "${READY}" != true ]]; then
     kill -TERM "${TF_PID}" 2>/dev/null || true
     exit 1
 fi
+
+echo "→ Starting loop proxy on :${PORT} -> :${ENGINE_PORT}"
+python3 "${SCRIPT_DIR}/loop_proxy.py" --listen "${PORT}" --upstream "127.0.0.1:${ENGINE_PORT}" &
+PROXY_PID=$!
+for i in $(seq 1 20); do
+    if curl -sf --max-time 1 "http://127.0.0.1:${PORT}/v1/models" >/dev/null 2>&1; then
+        break
+    fi
+    if ! kill -0 "${PROXY_PID}" 2>/dev/null; then
+        echo "ERROR: loop proxy exited. See the log above."
+        exit 1
+    fi
+    sleep 1
+    if [[ "${i}" == 20 ]]; then
+        echo "ERROR: loop proxy did not answer on :${PORT}"
+        exit 1
+    fi
+done
 
 LIVE_MODEL_ID="$(live_model_id)"
 
