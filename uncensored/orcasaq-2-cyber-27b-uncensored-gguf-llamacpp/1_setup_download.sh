@@ -20,11 +20,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_DIR="${SCRIPT_DIR}/engine"          # llama.cpp checkout + build
 MODELS_DIR="${SCRIPT_DIR}/models"
 VENV_DIR="${SCRIPT_DIR}/venv"              # just for huggingface_hub (downloads)
-# Stock llama.cpp. qwen3_5 (Qwen3.8) needs a recent build; if this ref does not
-# know the architecture, point these at PrismML's fork (which does):
-#   ORCA_LLAMACPP_URL=https://github.com/PrismML-Eng/llama.cpp.git ORCA_LLAMACPP_REF=prism-b10743-adfffbe
-LLAMACPP_URL="${ORCA_LLAMACPP_URL:-https://github.com/ggml-org/llama.cpp.git}"
-LLAMACPP_REF="${ORCA_LLAMACPP_REF:-master}"
+# PrismML's llama.cpp fork. It serves qwen3_5 (Qwen3.8) GGUFs on Metal at full
+# GPU speed (~30 tok/s decode for this model on an M5 Max). Stock ggml-org
+# master (build 11220, 2026-09) registered NO Metal device on this machine and
+# ran the model on CPU at ~1.8 tok/s — verified by serving the same GGUF on both
+# binaries. Override to try stock again on a future build:
+#   ORCA_LLAMACPP_URL=https://github.com/ggml-org/llama.cpp.git ORCA_LLAMACPP_REF=master
+LLAMACPP_URL="${ORCA_LLAMACPP_URL:-https://github.com/PrismML-Eng/llama.cpp.git}"
+LLAMACPP_REF="${ORCA_LLAMACPP_REF:-prism-b10743-adfffbe}"
 HF_REPO="orcarouter/OrcaSAQ-2-Cyber-27B-Uncensored-GGUF"
 GGUF_GLOB="OrcaSAQ-2-27B-Uncensored.gguf"   # single ~15.7 GB file, text-only
 
