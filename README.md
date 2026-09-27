@@ -35,8 +35,9 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/) | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` | 📦 Archived (weights removed) | Text | `:8085/v1` |
 | [`uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/) | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` | 📦 Archived DFlash (weights removed) | Text | `:8086/v1` |
 | [`uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/) | `glm/glm-4.7-flash-heretic-q8` | 🟢 Uncensored MoE (Ollama) | Text | `:18083/v1` |
+| [`uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/`](uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/) | `orcasaq/orcasaq-2-cyber-27b` | 🟡 **OrcaSAQ-2 Cyber 27B** (uncensored Qwen3.8; security research; llama.cpp; gated GGUF) | Text | `:8090/v1` |
 
-**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Muse Glimmer (`8087`), YuE2 (`8088`), Ternary Bonsai 2 (`8089` proxy / `8099` engine), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Qwen 3.8 TensorFold (`8769`), Qwen 3.8 OBLITERATED mtplx (`8768` proxy / `8767` engine), Ornith 1.0 (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB. YuE2 is a song generator (`POST /generate`), not a Kilo chat-completions provider.
+**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Muse Glimmer (`8087`), YuE2 (`8088`), Ternary Bonsai 2 (`8089` proxy / `8099` engine), OrcaSAQ-2 Cyber 27B (`8090` proxy / `8100` engine), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Qwen 3.8 TensorFold (`8769`), Qwen 3.8 OBLITERATED mtplx (`8768` proxy / `8767` engine), Ornith 1.0 (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB. YuE2 is a song generator (`POST /generate`), not a Kilo chat-completions provider.
 
 ---
 
@@ -129,6 +130,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 | 📦 | [`uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/) | `http://127.0.0.1:8085/v1` | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` |
 | 📦 | [`uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/) | `http://127.0.0.1:8086/v1` | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` |
 | 🟢 | [`uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/) | `http://127.0.0.1:18083/v1` | `glm/glm-4.7-flash-heretic-q8` |
+| 🟡 | [`uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/`](uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/) | `http://127.0.0.1:8090/v1` | `orcasaq/orcasaq-2-cyber-27b` |
 
 Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks — macOS may resolve `localhost` to `::1`.
 
