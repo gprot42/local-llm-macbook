@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
-"""Stop an OpenCode turn that is not making progress.
+"""Keep an OpenCode turn from looping — without interrupting the user.
 
 OpenCode's doom_loop check only looks at tool calls inside one assistant
 message, and one call per step never trips it. Alternating two commands
-never trips it either. This proxy sits in front of TensorFold and, after
-the latest user message, refuses to call the model when:
+never trips it either. This proxy sits in front of the engine and looks at
+the tool calls after the latest user message. It answers in two tiers:
 
-- the same tool call has returned the same result twice with no write/edit in
-  between (nothing changed, so repeating it cannot help; an edit between two
-  identical `node --check` runs is a normal verify loop and is forwarded)
-- the same tool call has been issued three times, even with different output
-- the turn has already run 200 tool calls (--max-rounds / LOOP_MAX_ROUNDS).
-  This is a backstop for a turn that never repeats itself and never finishes;
-  it must sit far above real work — a code-exploration turn of 48 distinct
-  greps and reads was cut off when the cap was 48.
+Nudge (the turn continues): when the model has *just* run a call that
+returned the same result a 2nd or 3rd time with no write/edit in between
+(an edit between two identical `node --check` runs is a normal verify loop
+and is left alone), or has just issued the same call a 3rd time even with
+different output, the proxy appends a "[Harness] ... do not run it again"
+note to that tool result and forwards the request. The model corrects
+itself in place; the user is not asked to do anything.
 
-A new user message starts the count over. Upstream bytes are relayed as they
-arrive (read1), so streamed tokens reach the client immediately.
+Stop (the turn ends, the model is not called): only when the identical
+call comes back a 4th time, the same call is issued a 6th time, or the turn
+has run 200 tool calls (--max-rounds / LOOP_MAX_ROUNDS — a backstop for a
+turn that never repeats and never finishes; it must sit far above real
+work, since a 48-call exploration turn was once cut off by a cap of 48).
+
+Stopping at the second identical result was tried first: it halted one
+session three times in an hour while the model retried a broken grep after
+every "continue". Every stop is an interruption; the nudge tier is what
+keeps the user out of the loop.
+
+A new user message starts the counts over. Upstream bytes are relayed as
+they arrive (read1), so streamed tokens reach the client immediately.
 
   python3 loop_proxy.py --self-test
   python3 loop_proxy.py --listen 8769 --upstream 127.0.0.1:8779
@@ -33,13 +43,26 @@ from typing import Any
 import http.client
 import uuid
 
-STOP_AFTER = 2
-CYCLE_REPEAT = 3
+NUDGE_SAME = 2      # identical result, nothing changed: nudge in place
+STOP_SAME = 4       # identical result keeps coming back: end the turn
+NUDGE_CYCLE = 3     # same call issued again (any output): nudge in place
+STOP_CYCLE = 6      # same call issued again and again: end the turn
 MAX_TOOL_ROUNDS = int(os.environ.get("LOOP_MAX_ROUNDS", "200"))
 # Tools that change files. An identical call repeated after one of these is a
 # legitimate re-verification, not a loop.
 STATE_CHANGING = {"write", "edit", "patch", "multiedit", "apply_patch"}
 
+NUDGE_SAME_TEXT = (
+    "\n\n[Harness] This exact command has now run {n} times in this turn and "
+    "returned this same result each time. Running it again will return the "
+    "same thing. Do not run it again: use this result, try a different "
+    "command, or report what it shows."
+)
+NUDGE_CYCLE_TEXT = (
+    "\n\n[Harness] This exact command has now been issued {n} times in this "
+    "turn. That is a loop. Do not issue it again: change the approach, or "
+    "report what this result shows."
+)
 STOP_TEXT = (
     "[Harness] Stopped: the same tool call already ran "
     "{n} times with the same result. That result is above. "
@@ -111,31 +134,53 @@ def _rounds_after_last_user(messages: list[dict[str, Any]]) -> list[tuple[str, s
     return rounds
 
 
-def stop_reason(messages: list[dict[str, Any]]) -> str | None:
-    """Why this request should not reach the model, or None to forward it.
+def decide(messages: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """("stop", text) to end the turn, ("nudge", text) to annotate the latest
+    tool result and forward, or (None, None) to forward untouched.
 
-    Only the turns after the latest user message count. An older repeated
-    scan stays in the history, and a new prompt must still reach the model.
+    Only the rounds after the latest user message count, and a nudge or stop
+    is issued only when the offending call is the latest round — a turn that
+    repeated something earlier and then moved on is never touched.
     """
 
     rounds = _rounds_after_last_user(messages)
     if len(rounds) >= MAX_TOOL_ROUNDS:
-        return CAP_TEXT.format(n=len(rounds))
+        return "stop", CAP_TEXT.format(n=len(rounds))
+    if not rounds:
+        return None, None
     by_sig: dict[str, list[int]] = {}
     for index, (sig, _) in enumerate(rounds):
         by_sig.setdefault(sig, []).append(index)
-    for indices in by_sig.values():
-        if len(indices) < STOP_AFTER:
-            continue
+    indices = by_sig[rounds[-1][0]]
+    n = len(indices)
+    if n >= NUDGE_SAME:
         prev, last = indices[-2], indices[-1]
         same_result = rounds[prev][1] == rounds[last][1]
         changed_between = any(_tool_name(rounds[k][0]) in STATE_CHANGING for k in range(prev + 1, last))
         if same_result and not changed_between:
-            return STOP_TEXT.format(n=len(indices))
-    for indices in by_sig.values():
-        if len(indices) >= CYCLE_REPEAT:
-            return CYCLE_TEXT.format(n=len(indices))
-    return None
+            if n >= STOP_SAME:
+                return "stop", STOP_TEXT.format(n=n)
+            return "nudge", NUDGE_SAME_TEXT.format(n=n)
+    if n >= STOP_CYCLE:
+        return "stop", CYCLE_TEXT.format(n=n)
+    if n >= NUDGE_CYCLE:
+        return "nudge", NUDGE_CYCLE_TEXT.format(n=n)
+    return None, None
+
+
+def inject_nudge(messages: list[dict[str, Any]], text: str) -> bool:
+    """Append the nudge to the latest tool result, so the model reads it next."""
+
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content.append({"type": "text", "text": text})
+        else:
+            message["content"] = ("" if content is None else str(content)) + text
+        return True
+    return False
 
 
 def _tool_name(sig: str) -> str:
@@ -195,10 +240,14 @@ class Proxy(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 payload = None
             if isinstance(payload, dict):
-                reason = stop_reason(payload.get("messages") or [])
-                if reason:
-                    self._send_stop(payload, reason)
+                messages = payload.get("messages") or []
+                action, text = decide(messages)
+                if action == "stop":
+                    self._send_stop(payload, text or "")
                     return
+                if action == "nudge" and text and inject_nudge(messages, text):
+                    body = json.dumps(payload).encode()
+                    self.log_message("nudged: %s", text.strip()[len("[Harness] "):86])
         self._forward(body)
 
     def _send_stop(self, payload: dict[str, Any], reason: str) -> None:
@@ -254,36 +303,49 @@ def _self_test() -> None:
         "tool_calls": [{"id": cid, "type": "function", "function": {"name": n, "arguments": args}}],
     }
     result = lambda cid, text: {"role": "tool", "tool_call_id": cid, "content": text}  # noqa: E731
+    action = lambda msgs: decide(msgs)[0]  # noqa: E731
     same = json.dumps({"command": "python3 scan.py"})
-    once = [call("bash", same, "a"), result("a", "total symbols: 268")]
-    assert stop_reason(once) is None
-    twice = once + [call("bash", same, "b"), result("b", "total symbols: 268")]
-    assert stop_reason(twice) is not None
-    # A new user prompt after an old loop must be forwarded.
-    assert stop_reason(twice + [{"role": "user", "content": "try something else"}]) is None
-    resumed = twice + [{"role": "user", "content": "try something else"}, call("bash", same, "c"), result("c", "total symbols: 268")]
-    assert stop_reason(resumed) is None
-    # Alternating commands: neither pair is adjacent, but one call recurs.
+
+    def repeated(k: int) -> list[dict[str, Any]]:
+        msgs: list[dict[str, Any]] = [{"role": "user", "content": "go"}]
+        for i in range(k):
+            msgs += [call("bash", same, f"r{i}"), result(f"r{i}", "total symbols: 268")]
+        return msgs
+
+    assert action(repeated(1)) is None
+    assert action(repeated(2)) == "nudge", "2nd identical result must nudge, not stop"
+    assert action(repeated(3)) == "nudge"
+    assert action(repeated(4)) == "stop", "4th identical result must end the turn"
+    # The model moved on after a repeat: leave the turn alone.
+    moved_on = repeated(2) + [call("bash", json.dumps({"command": "ls"}), "m"), result("m", "src")]
+    assert action(moved_on) is None, "a turn that moved on must not be touched"
+    # A new user prompt after an old loop must be forwarded untouched.
+    assert action(repeated(4) + [{"role": "user", "content": "try something else"}]) is None
+    resumed = repeated(4) + [{"role": "user", "content": "try something else"}, call("bash", same, "c"), result("c", "total symbols: 268")]
+    assert action(resumed) is None
+    # Alternating commands: the same call recurs, each time with different output.
     other = json.dumps({"command": "curl localhost"})
-    alternating = [{"role": "user", "content": "go"}]
-    for i, args in enumerate((same, other, same, other, same)):
-        alternating += [call("bash", args, f"x{i}"), result(f"x{i}", f"out-{i}")]
-    assert stop_reason(alternating) is not None
+
+    def alternating(k: int) -> list[dict[str, Any]]:
+        msgs: list[dict[str, Any]] = [{"role": "user", "content": "go"}]
+        for i in range(k):
+            msgs += [call("bash", same if i % 2 == 0 else other, f"x{i}"), result(f"x{i}", f"out-{i}")]
+        return msgs
+
+    assert action(alternating(3)) is None, "issued twice with different output is not yet a loop"
+    assert action(alternating(5)) == "nudge", "issued a 3rd time must nudge"
+    assert action(alternating(11)) == "stop", "issued a 6th time must end the turn"
     # Distinct calls are fine until the hard cap.
     unique = [{"role": "user", "content": "go"}]
     for i in range(MAX_TOOL_ROUNDS - 1):
-        args = json.dumps({"command": f"step {i}"})
-        unique += [call("bash", args, f"u{i}"), result(f"u{i}", f"ok {i}")]
-    assert stop_reason(unique) is None
+        unique += [call("bash", json.dumps({"command": f"step {i}"}), f"u{i}"), result(f"u{i}", f"ok {i}")]
+    assert action(unique) is None
     unique += [call("bash", json.dumps({"command": "last"}), "uZ"), result("uZ", "ok")]
-    assert stop_reason(unique) is not None
-    changed = once + [call("bash", same, "b"), result("b", "total symbols: 269")]
-    assert stop_reason(changed) is None
-    other = once + [call("bash", json.dumps({"command": "ls"}), "b"), result("b", "src")]
-    assert stop_reason(other) is None
+    assert action(unique) == "stop"
+    changed = repeated(1) + [call("bash", same, "b"), result("b", "total symbols: 269")]
+    assert action(changed) is None, "a different result is progress"
     # A healthy verify loop: edit -> node --check -> another edit -> node --check.
-    # Both checks print the same (empty) output, but a file changed in between,
-    # so the second check is legitimate and must be forwarded.
+    # Both checks print the same (empty) output, but a file changed in between.
     check = json.dumps({"command": "node --check game.js"})
     healthy = [
         {"role": "user", "content": "build"},
@@ -292,13 +354,20 @@ def _self_test() -> None:
         call("edit", json.dumps({"filePath": "game.js", "oldString": "v1", "newString": "v2"}), "e1"), result("e1", "Edit applied successfully."),
         call("bash", check, "c2"), result("c2", ""),
     ]
-    assert stop_reason(healthy) is None, "edit between identical checks must not stop the turn"
-    # Only a read between the two identical checks: nothing changed, still a loop.
+    assert action(healthy) is None, "edit between identical checks must be left alone"
+    # Only a read between the two identical checks: nothing changed, nudge.
     looping = healthy[:5] + [
         call("read", json.dumps({"filePath": "game.js"}), "r1"), result("r1", "v1"),
         call("bash", check, "c2"), result("c2", ""),
     ]
-    assert stop_reason(looping) is not None, "identical repeat with no file change must stop"
+    assert action(looping) == "nudge", "identical repeat with no file change must nudge"
+    # The nudge lands on the latest tool result, for string and part-list content.
+    msgs = repeated(2)
+    _, text = decide(msgs)
+    assert text and inject_nudge(msgs, text) and msgs[-1]["content"].endswith(text)
+    as_parts = repeated(2)
+    as_parts[-1]["content"] = [{"type": "text", "text": "total symbols: 268"}]
+    assert inject_nudge(as_parts, text) and as_parts[-1]["content"][-1]["text"] == text
     _stream_self_test()
     print("loop_proxy self-test ok")
 

@@ -31,11 +31,13 @@ ALIAS=ternary-bonsai-2-27b
 HOST=127.0.0.1
 PORT=8089
 # loop_proxy.py owns the public port and forwards to llama-server on the engine
-# port. It ends a turn, without calling the model, when the same tool call has
-# returned the same result twice with no write/edit in between, when one call
-# has been issued three times, or after 200 tool calls (LOOP_MAX_ROUNDS) — a
-# prompt rule alone did not hold (one session repeated a call 782 times).
-# Streamed tokens pass through.
+# port. When the model has just repeated a call (same result a 2nd/3rd time with
+# no write/edit between, or the same call issued a 3rd time) it nudges in place:
+# appends a "[Harness] do not run it again" note to that tool result and forwards,
+# so the turn continues without the user. It only ends a turn, without calling
+# the model, on the 4th identical result, the 6th issuance, or after 200 tool
+# calls (LOOP_MAX_ROUNDS) — a prompt rule alone did not hold (one session
+# repeated a call 782 times). Streamed tokens pass through.
 ENGINE_PORT="${BONSAI_ENGINE_PORT:-8099}"
 PROXY="${SCRIPT_DIR}/loop_proxy.py"
 CTX="${BONSAI_CTX:-81920}"
