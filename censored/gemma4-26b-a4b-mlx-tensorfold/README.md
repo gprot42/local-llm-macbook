@@ -67,7 +67,7 @@ mlx-community/gemma-4-26b-a4b-it-4bit
 
 | File | Purpose |
 |------|---------|
-| `1_setup_download.sh` | venv, TensorFold `v0.3.6.3`, pull weights, write `.tensorfold_config` |
+| `1_setup_download.sh` | venv, TensorFold `v0.5.0`, pull weights, write `.tensorfold_config` |
 | `2_start_tensorfold.sh` | Engine on `:8102`, loop proxy on `:8092`. Harness gate on by default |
 | `loop_proxy.py` | Repeat guard in front of the engine (identical to the sibling stacks) |
 | `test_harness.py` | Live API checks (tools, stream, multi-turn) |
@@ -86,7 +86,7 @@ Context cap defaults to 131072 (server `-c`). The client `limit` in
 conservative window used across these stacks; raise it if you need more, keeping
 `context + output ≤` the server `-c`.
 
-Pinned to **TensorFold 0.3.6.3** (`TF_VERSION` in `1_setup_download.sh`) — the
+Pinned to **TensorFold 0.5.0** (`TF_VERSION` in `1_setup_download.sh`) — the
 release with the `gemma4` MoE lane. Bump only after re-checking the model loads
 and drafted replies stay byte-identical to `"draft": false`.
 

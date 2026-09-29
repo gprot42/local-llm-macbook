@@ -62,4 +62,4 @@ OpenCode: `./install-opencode-json.sh --force` merges the
 - **Drafter:** the base-model DFlash drafter works against the abliterated
   target (drafts are exact-verified). If acceptance is poor, `--no-drafts`.
 - Model dir is git-ignored (`model/` and the cache path); the *recipe* above is
-  the source of truth. Pinned to TensorFold 0.3.6.3.
+  the source of truth. Pinned to TensorFold 0.5.0.

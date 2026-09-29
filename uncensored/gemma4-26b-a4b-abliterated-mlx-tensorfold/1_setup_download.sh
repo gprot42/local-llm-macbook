@@ -100,7 +100,7 @@ python -m pip install --upgrade pip
 # Pinned to the release that ships the gemma4 MoE lane. Bump only after
 # re-checking that gemma-4-26B-A4B loads and drafted replies stay byte-exact
 # against "draft": false.
-TF_VERSION="${TF_VERSION:-v0.3.6.3}"
+TF_VERSION="${TF_VERSION:-v0.5.0}"
 python -m pip install --upgrade "git+https://github.com/ashhart/TensorFold.git@${TF_VERSION}"
 
 echo "→ $(tensorfold --version)"
