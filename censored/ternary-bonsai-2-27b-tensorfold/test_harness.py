@@ -197,6 +197,35 @@ def _stream_raw(base: str, body: dict, timeout: float = 120.0) -> tuple[int, str
     return status, data, elapsed
 
 
+def _assemble_sse(raw: str) -> dict[str, Any]:
+    """Rebuild a streamed reply the way an AI-SDK client does: concatenate
+    content deltas and each tool call's name/argument fragments by index."""
+    out: dict[str, Any] = {"content": "", "calls": {}, "finish": None, "done": False, "bad_lines": 0}
+    for line in raw.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            out["done"] = True
+            continue
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            out["bad_lines"] += 1
+            continue
+        for choice in event.get("choices") or []:
+            delta = choice.get("delta") or {}
+            out["content"] += delta.get("content") or ""
+            for tc in delta.get("tool_calls") or []:
+                slot = out["calls"].setdefault(tc.get("index", 0), {"name": "", "arguments": ""})
+                fn = tc.get("function") or {}
+                slot["name"] += fn.get("name") or ""
+                slot["arguments"] += fn.get("arguments") or ""
+            if choice.get("finish_reason"):
+                out["finish"] = choice["finish_reason"]
+    return out
+
+
 def _msg(data: dict) -> dict:
     return (data.get("choices") or [{}])[0].get("message") or {}
 
@@ -528,6 +557,59 @@ def run_live_tests(
             )
     except Exception as e:
         report.check("live: tool_calls includes bash", False, str(e))
+
+    # Streamed tool call — the path OpenCode and Kilo actually use. No
+    # temperature: OpenCode's `temperature: false` leaves sampling to the server.
+    try:
+        status, raw, elapsed = _stream_raw(
+            base,
+            {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Call the bash tool with command exactly: "
+                            "echo harness_stream_ok"
+                        ),
+                    }
+                ],
+                "tools": TOOLS,
+                "tool_choice": "auto",
+                "max_tokens": 96,
+                "stream": True,
+            },
+        )
+        sse = _assemble_sse(raw)
+        # Framing is the server's job, not the model's: always a hard check.
+        report.check(
+            "live: streamed tool call SSE is well-formed",
+            status == 200 and sse["done"] and not sse["bad_lines"] and sse["finish"] is not None,
+            f"status={status} done={sse['done']} bad_lines={sse['bad_lines']} "
+            f"finish={sse['finish']!r} {elapsed:.2f}s",
+        )
+        calls = list(sse["calls"].values())
+        args_ok = True
+        for call in calls:
+            try:
+                args_ok = args_ok and isinstance(json.loads(call["arguments"]), dict)
+            except json.JSONDecodeError:
+                args_ok = False
+        tool_ok = (
+            status == 200
+            and sse["finish"] == "tool_calls"
+            and any(c["name"] == "bash" for c in calls)
+            and args_ok
+        )
+        report.check(
+            "live: streamed tool call reassembles to bash + JSON args",
+            tool_ok,
+            "; ".join(f"{c['name']}({c['arguments'][:60]})" for c in calls)
+            or f"no tool call, content={sse['content'][:50]!r}",
+            soft=not tool_ok,
+        )
+    except Exception as e:
+        report.check("live: streamed tool call SSE is well-formed", False, str(e))
 
     try:
         status, raw, elapsed = _stream_raw(

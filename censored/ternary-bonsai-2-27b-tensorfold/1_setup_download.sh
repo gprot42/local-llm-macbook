@@ -5,7 +5,7 @@
 # TensorFold 0.3.6.3+ serves PrismML's MLX 2-bit pack on the Qwen3.8 lane
 # engine (family `bonsai`). The pack is text-only here: the vision tower is
 # not loaded. Image input stays on the GGUF sibling
-# (../ternary-bonsai-2-27b-gguf-llamacpp).
+# (../archive/ternary-bonsai-2-27b-gguf-llamacpp, archived).
 #
 #   HF model   prism-ml/Ternary-Bonsai-2-27B-mlx-2bit   (~8.5 GB)
 #   Drafter    z-lab/Qwen3.8-27B-DFlash2                (~3.8 GB, optional)

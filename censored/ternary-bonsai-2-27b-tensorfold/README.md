@@ -2,7 +2,7 @@
 
 Run **Ternary Bonsai 2 27B** on Apple Silicon with [TensorFold](https://github.com/ashhart/TensorFold)
 0.3.6.3 (family `bonsai`). Same model as
-[`../ternary-bonsai-2-27b-gguf-llamacpp/`](../ternary-bonsai-2-27b-gguf-llamacpp/),
+[`../archive/ternary-bonsai-2-27b-gguf-llamacpp/`](../archive/ternary-bonsai-2-27b-gguf-llamacpp/) (archived),
 different weights and engine. This API is **text only**. Image input stays on
 the GGUF sibling (`:8089`).
 

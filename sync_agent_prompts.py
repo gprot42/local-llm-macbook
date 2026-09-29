@@ -37,7 +37,6 @@ TARGETS = [
     Path("censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/kilo.json"),
     Path("censored/muse-glimmer-30b-mlx/kilo.json"),
     Path("uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/kilo.json"),
-    Path("censored/ternary-bonsai-2-27b-gguf-llamacpp/kilo.json"),
     Path("censored/ternary-bonsai-2-27b-tensorfold/kilo.json"),
     Path("uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/kilo.json"),
 ]

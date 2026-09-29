@@ -10,9 +10,10 @@ Nudge (the turn continues): when the model has *just* run a call that
 returned the same result a 2nd or 3rd time with no write/edit in between
 (an edit between two identical `node --check` runs is a normal verify loop
 and is left alone), or has just issued the same call a 3rd time even with
-different output, the proxy appends a "[Harness] ... do not run it again"
-note to that tool result and forwards the request. The model corrects
-itself in place; the user is not asked to do anything.
+different output, the proxy replaces that tool result with a "[Harness]
+REFUSED ..." error that quotes the original output (from the 3rd repeat it
+also adds a user-role directive) and forwards the request. The model
+corrects itself in place; the user is not asked to do anything.
 
 Stop (the turn ends, the model is not called): only when the identical
 call comes back a 4th time, the same call is issued a 6th time, or the turn
