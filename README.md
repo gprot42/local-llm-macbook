@@ -21,7 +21,7 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`censored/nemotron-3.5-lightning-30b-a3b-mlx-tensorfold/`](censored/nemotron-3.5-lightning-30b-a3b-mlx-tensorfold/) | `tensorfold-nemotron/nemotron-3.5-lightning-30b-tensorfold` | 🟡 **Nemotron 3.5 Lightning 30B-A3B** (MoE; TensorFold nemotron_h; MTP self-draft) | Text | `:8093/v1` |
 | [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `ds4/deepseek-v4-flash` | 🟢 **Great for coding** (128 GB, native Metal) | Text | `:8083/v1` |
 | [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `deepseek-mlx/deepseek-v4-flash-2bit-dq` | 🟡 **Heavy coding** (128 GB, MLX) | Text | `:8082/v1` |
-| [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` | 🟢 Stock Gemma 4 31B IT (AtomicChat 2026-07-15) | Text | `:8080/v1` |
+| [`censored/archive/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/archive/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` | 📦 Archived — Stock Gemma 4 31B IT (AtomicChat 2026-07-15) | Text | `:8080/v1` |
 | [`censored/diffusiongemma4-26b-a4b-mlx/`](censored/diffusiongemma4-26b-a4b-mlx/) | `diffusiongemma/diffusiongemma-26b-a4b-it-bf16` | 🟢 Multimodal / research | **Text + image** | `:8080/v1` |
 | [`censored/ornith-1.0-35b-q8-gguf-ollama/`](censored/ornith-1.0-35b-q8-gguf-ollama/) | `ornith/ornith-1.0-35b-q8` | 🟢 Guided agent trials | Text | `:18082/v1` |
 | [`censored/yue2-3b-mlx/`](censored/yue2-3b-mlx/) | `yue2-3b-mlx` (not a Kilo chat model) | 🟡 **YuE2-3B** music generation (lyra / yue2-mlx) | **Text → audio** | `:8088` |
@@ -30,8 +30,8 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 
 | Folder | Select this model (Kilo) | Role | Modalities | API |
 |--------|--------------------------|------|------------|-----|
-| [`uncensored/gemma4-jang-crack-31b-mlx/`](uncensored/gemma4-jang-crack-31b-mlx/) | `openai-compatible/gemma-4-31b-jang-crack-mlx` | 🟡 Uncensored chat (JANG) | **Text + image** | `:8080/v1` |
-| [`uncensored/gemma4-server-heretic-31b-mlx/`](uncensored/gemma4-server-heretic-31b-mlx/) | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` | 🟢 Uncensored chat (Heretic) | **Text + image** | `:8080/v1` |
+| [`uncensored/archive/gemma4-jang-crack-31b-mlx/`](uncensored/archive/gemma4-jang-crack-31b-mlx/) | `openai-compatible/gemma-4-31b-jang-crack-mlx` | 📦 Archived — Uncensored chat (JANG) | **Text + image** | `:8080/v1` |
+| [`uncensored/archive/gemma4-server-heretic-31b-mlx/`](uncensored/archive/gemma4-server-heretic-31b-mlx/) | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` | 📦 Archived — Uncensored chat (Heretic) | **Text + image** | `:8080/v1` |
 | [`uncensored/archived/qwen3-8-27b-obliterated-mtplx/`](uncensored/archived/qwen3-8-27b-obliterated-mtplx/) | `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` | 📦 Archived uncensored OBLITERATUS 27B — hardened Kilo proxy (greedy, thinking off); unstable in Kilo loops | Text | `:8768/v1` (proxy) |
 | [`uncensored/archived/qwen3-32b-heretic-mlx/`](uncensored/archived/qwen3-32b-heretic-mlx/) | `qwen3-heretic/qwen3-32b-heretic-mlx-5bit` | 📦 Archived uncensored dense 32B (MLX; not 3.6/3.7) | Text | `:8084/v1` |
 | [`uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/) | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` | 📦 Archived (weights removed) | Text | `:8085/v1` |
@@ -120,7 +120,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 | 🟡 | [`censored/nemotron-3.5-lightning-30b-a3b-mlx-tensorfold/`](censored/nemotron-3.5-lightning-30b-a3b-mlx-tensorfold/) | `http://127.0.0.1:8093/v1` | `tensorfold-nemotron/nemotron-3.5-lightning-30b-tensorfold` |
 | 🟢 | [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `http://127.0.0.1:8083/v1` | `ds4/deepseek-v4-flash` |
 | 🟡 | [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `http://127.0.0.1:8082/v1` | `deepseek-mlx/deepseek-v4-flash-2bit-dq` |
-| 🟢 | [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` |
+| 🟢 | [`censored/archive/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/archive/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` |
 | 🟢 | [`censored/diffusiongemma4-26b-a4b-mlx/`](censored/diffusiongemma4-26b-a4b-mlx/) | `http://localhost:8080/v1` | `diffusiongemma/diffusiongemma-26b-a4b-it-bf16` |
 | 🟢 | [`censored/ornith-1.0-35b-q8-gguf-ollama/`](censored/ornith-1.0-35b-q8-gguf-ollama/) | `http://127.0.0.1:18082/v1` | `ornith/ornith-1.0-35b-q8` |
 
@@ -128,8 +128,8 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 
 | | Folder | Base URL | Select model ID |
 |---|--------|----------|-----------------|
-| 🟡 | [`uncensored/gemma4-jang-crack-31b-mlx/`](uncensored/gemma4-jang-crack-31b-mlx/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-jang-crack-mlx` |
-| 🟢 | [`uncensored/gemma4-server-heretic-31b-mlx/`](uncensored/gemma4-server-heretic-31b-mlx/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` |
+| 🟡 | [`uncensored/archive/gemma4-jang-crack-31b-mlx/`](uncensored/archive/gemma4-jang-crack-31b-mlx/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-jang-crack-mlx` |
+| 🟢 | [`uncensored/archive/gemma4-server-heretic-31b-mlx/`](uncensored/archive/gemma4-server-heretic-31b-mlx/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-heretic-mlx-4bit` |
 | 📦 | [`uncensored/archived/qwen3-8-27b-obliterated-mtplx/`](uncensored/archived/qwen3-8-27b-obliterated-mtplx/) | `http://127.0.0.1:8768/v1` | `mtplx-qwen38-obl/qwen3.8-27b-obliterated-mtplx` |
 | 📦 | [`uncensored/archived/qwen3-32b-heretic-mlx/`](uncensored/archived/qwen3-32b-heretic-mlx/) | `http://127.0.0.1:8084/v1` | `qwen3-heretic/qwen3-32b-heretic-mlx-5bit` |
 | 📦 | [`uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/) | `http://127.0.0.1:8085/v1` | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` |
@@ -153,7 +153,7 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 - [deepseek-v4-flash-ds4/README.md](censored/deepseek-v4-flash-ds4/README.md) — V4 Flash via antirez/ds4 (native Metal, resumable ~81 GB download)  
 - [deepseek-v4-flash-2bit-dq-mlx/README.md](censored/deepseek-v4-flash-2bit-dq-mlx/README.md) — V4 Flash / community mlx-lm  
 - [diffusiongemma4 README](censored/diffusiongemma4-26b-a4b-mlx/README-diffusiongemma4.md) · [ornith README](censored/ornith-1.0-35b-q8-gguf-ollama/README.md)  
-- [gemma4 stock IT AtomicChat 2026-07-15](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/README.md)  
+- [gemma4 stock IT AtomicChat 2026-07-15](censored/archive/gemma4-server-atomicchat-mlx-31b-2026-07-15/README.md)  
 - [YuE2-3B MLX](censored/yue2-3b-mlx/README.md) — lyrics/style → 48 kHz song (`lyra` / yue2-mlx; not a Kilo chat model)  
 - [ternary-bonsai-2-27b-tensorfold/README.md](censored/ternary-bonsai-2-27b-tensorfold/README.md) — Bonsai 2 MLX 2-bit on TensorFold + DFlash2 (`:8091`, text)
 - [gemma4-26b-a4b-heretic-mlx-tensorfold/README.md](uncensored/gemma4-26b-a4b-heretic-mlx-tensorfold/README.md) — Gemma 4 26B-A4B MoE (heretic) on TensorFold + DFlash (`:8092`, text)
@@ -163,8 +163,8 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 
 **Uncensored**
 
-- [gemma4-jang-crack-31b-mlx/README.md](uncensored/gemma4-jang-crack-31b-mlx/README.md) — JANG_4M CRACK (why over Heretic, no re-quantize needed)  
-- [gemma4-server-heretic-31b-mlx/README.md](uncensored/gemma4-server-heretic-31b-mlx/README.md) — Heretic + proxy · [Continue.dev](uncensored/gemma4-server-heretic-31b-mlx/README.md#continuedev)  
+- [gemma4-jang-crack-31b-mlx/README.md](uncensored/archive/gemma4-jang-crack-31b-mlx/README.md) — JANG_4M CRACK (why over Heretic, no re-quantize needed)  
+- [gemma4-server-heretic-31b-mlx/README.md](uncensored/archive/gemma4-server-heretic-31b-mlx/README.md) — Heretic + proxy · [Continue.dev](uncensored/archive/gemma4-server-heretic-31b-mlx/README.md#continuedev)  
 - [qwen3-8-27b-obliterated-mtplx/README.md](uncensored/archived/qwen3-8-27b-obliterated-mtplx/README.md) — Qwen3.8-27B OBLITERATED V3 (hardened Kilo proxy on :8768; archived)  
 - [qwen3-32b-heretic-mlx/README.md](uncensored/archived/qwen3-32b-heretic-mlx/README.md) — Qwen3-32B Heretic (original Qwen3 dense, not 3.6/3.7; archived)  
 - [qwen3.5-122b-a10b-abliterated-mlx/README.md](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/README.md) — Qwen3.5-122B-A10B Abliterated MLX 4-bit (~70 GB; 128 GB recommended)  
