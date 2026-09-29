@@ -8,8 +8,12 @@
 # router. This uncensored/heretic pack is that MoE checkpoint; the 31B dense
 # Gemma 4 packs are a different architecture the lane refuses.
 #
-#   HF model   mlx-community/gemma-4-26B-A4B-it-heretic-4bit  (~15 GB, MoE 26B-A4B)
+#   HF model   Jiunsong/supergemma4-26b-uncensored-mlx-4bit-v2  (~15 GB, MoE 26B-A4B, uncensored)
 #   Drafter    z-lab/gemma-4-26B-A4B-it-DFlash               (~0.8 GB, optional, DFlash)
+#
+# The lane needs 4-bit MLP projections with only the router at 8-bit. Common
+# uncensored packs (…-heretic-4bit, supergemma …-multimodal) quantise the MLP
+# at 8-bit and are refused; this v2 pack uses the lane's 4-bit-MLP layout.
 #
 # Usage:
 #   ./1_setup_download.sh                 # venv + CLI + model + drafter
@@ -23,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/venv"
 CONFIG_FILE="${SCRIPT_DIR}/.tensorfold_config"
 
-DEFAULT_MODEL="mlx-community/gemma-4-26B-A4B-it-heretic-4bit"
+DEFAULT_MODEL="Jiunsong/supergemma4-26b-uncensored-mlx-4bit-v2"
 DEFAULT_DRAFTER="z-lab/gemma-4-26B-A4B-it-DFlash"
 MODEL_ALIAS="${GEMMA4_ALIAS:-gemma-4-26b-a4b-heretic-tensorfold}"
 CONTEXT="${GEMMA4_CONTEXT:-131072}"

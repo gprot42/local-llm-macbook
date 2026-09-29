@@ -11,7 +11,7 @@ other model ports in this repo.
 
 | | Hugging Face | Size |
 |--|--|--|
-| Model | `mlx-community/gemma-4-26B-A4B-it-heretic-4bit` | ~15 GB |
+| Model | `Jiunsong/supergemma4-26b-uncensored-mlx-4bit-v2` | ~15 GB |
 | Drafter | `z-lab/gemma-4-26B-A4B-it-DFlash` | ~0.8 GB |
 
 The pack is `model_type: gemma4`, `enable_moe_block: true` (128 experts, top-8),
@@ -58,7 +58,7 @@ loop_proxy.py            (repeat guard, :8092)
     ▼
 tensorfold serve         (gemma4 lane, DFlash drafter then exact verify, :8102)
     ▼
-mlx-community/gemma-4-26B-A4B-it-heretic-4bit
+Jiunsong/supergemma4-26b-uncensored-mlx-4bit-v2
 ```
 
 `./1_setup_download.sh --no-drafter` skips the DFlash drafter (one token per round).
@@ -104,8 +104,12 @@ or the pack is not the MoE checkpoint (dense Gemma 4 is refused). Re-run
 `./1_setup_download.sh`.
 
 **Lane refuses the checkpoint** — the `gemma4` kernels need `enable_moe_block`
-in every layer and MLX 4-bit in groups of 32/64 with an 8-bit router. Use the
-`…-heretic-4bit` pack, not an `mxfp4` or dense conversion.
+in every layer and **4-bit MLP** projections with only the **router at 8-bit**.
+Many uncensored packs (`mlx-community/…-heretic-4bit`, `supergemma…-multimodal`)
+quantise the MLP at 8-bit and are refused — verify a pack's `config.json`
+quantization block before use. `Jiunsong/supergemma4-26b-uncensored-mlx-4bit-v2`
+has the correct layout; the lane's reference `mlx-community/gemma-4-26b-a4b-it-4bit`
+is the censored fallback.
 
 **Drafter does not load** — the DFlash drafter is optional; start with
 `--no-drafts` to serve without it (slower, one token per round) and report the
