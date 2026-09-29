@@ -1,0 +1,4 @@
+venv/
+.tensorfold_config
+__pycache__/
+model/
