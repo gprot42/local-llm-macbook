@@ -203,6 +203,34 @@
         }
       }
     },
+    "tensorfold-bonsai": {
+      "name": "Ternary Bonsai 2 27B (TensorFold, local)",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://127.0.0.1:8091/v1",
+        "timeout": 1800000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 900000
+      },
+      "models": {
+        "ternary-bonsai-2-27b-tensorfold": {
+          "name": "Ternary Bonsai 2 27B — TensorFold MLX 2-bit (text, DFlash2)",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          }
+        }
+      }
+    },
     "diffusiongemma": {
       "name": "DiffusionGemma MLX (local)",
       "options": {

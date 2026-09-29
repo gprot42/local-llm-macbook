@@ -18,6 +18,7 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 | **Qwen 3.8 27B OBLITERATED mtplx** | `uncensored/archived/qwen3-8-27b-obliterated-mtplx/` | **Text only** | Archived (unstable in Kilo loops); hardened Kilo proxy on :8768; mlx-4bit ~14 GB |
 | **Muse Glimmer 30B** | `censored/muse-glimmer-30b-mlx/` | **Text + image** | Meta MSL agentic 30B; mlx-vlm + official DFlash |
 | **Ternary Bonsai 2 27B** | `censored/ternary-bonsai-2-27b-gguf-llamacpp/` | **Text + image** | PrismML ternary (~1.72 bit) Qwen3.8 27B; llama.cpp fork, `:8089` |
+| **Ternary Bonsai 2 27B TensorFold** | `censored/ternary-bonsai-2-27b-tensorfold/` | **Text only** | Same model, MLX 2-bit pack on TensorFold + DFlash2; `:8091` |
 | **DeepSeek V4 Flash ds4** | `censored/deepseek-v4-flash-ds4/` | **Text only** | Native Metal GGUF |
 | **DeepSeek V4 Flash MLX** | `censored/deepseek-v4-flash-2bit-dq-mlx/` | **Text only** | mlx-lm community path |
 | **Gemma 4 31B AtomicChat** | `censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/` | **Text only** | Language quant + chat template; not a vision package |
@@ -48,8 +49,8 @@ When to pick which local stack on Apple Silicon. Pair with the port/Kilo table i
 
 | You need… | Use |
 |-----------|-----|
-| Text coding / agents | Qwen 3.6, DeepSeek, AtomicChat, Ornith, Qwen3/3.5/GLM stacks, Muse Glimmer |
-| Images in Kilo (attach / paste) | **Muse Glimmer** (aligned), **Heretic** (grafted), **JANG CRACK** (native), or **DiffusionGemma** (vision-first research) |
+| Text coding / agents | Qwen 3.6, DeepSeek, AtomicChat, Ornith, Qwen3/3.5/GLM stacks, Muse Glimmer, Bonsai TensorFold |
+| Images in Kilo (attach / paste) | **Muse Glimmer** (aligned), **Bonsai 2 GGUF** (`:8089`), **Heretic** (grafted), **JANG CRACK** (native), or **DiffusionGemma** (vision-first research) |
 | Aligned Gemma text only | **AtomicChat** — do not expect image understanding |
 | Vision weights for grafting | `mlx-community/gemma-4-31b-it-4bit`, not AtomicChat |
 | Local songs from lyrics / style | **YuE2-3B MLX** (`:8088`) |
@@ -64,6 +65,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 |-----------|--------|-------|
 | Snappy Kilo tool loops | **Qwen 3.6 27B mtplx** (`:8765`); try **Qwen 3.8** (`:8766`) when weights land | DeepSeek / Qwen3.5-122B for “feel fast” |
 | Qwen 3.8 27B, TensorFold decode | **Qwen 3.8 TensorFold** (`:8769`, DFlash2) | Loading it next to mtplx Qwen 3.8; image input (API is text) |
+| Ternary Bonsai 2, smaller weights, DFlash2 | **Bonsai TensorFold** (`:8091`) | Image input (use **Bonsai GGUF** `:8089`); co-loading Qwen 3.8 TensorFold or the GGUF sibling |
 | Aligned local agents + screenshots | **Muse Glimmer 30B** (`:8087`) | Ultra-snappy loops (thinking is always on) |
 | Hard multi-file coding quality | **DeepSeek V4 Flash ds4** (`:8083`) | ≤64 GB machines; co-loading another 70+ GB model |
 | Uncensored chat (Gemma + vision) | **Gemma Heretic** or **JANG CRACK** (`:8080`) | Unattended huge agent refactors |
@@ -150,6 +152,30 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 - Image input
 - The mtplx / mlx-community quant (different conversion; not this folder's default)
 - Co-loading with Qwen 3.6 or Qwen 3.8 mtplx on 128 GB
+
+---
+
+### Ternary Bonsai 2 27B — TensorFold (`censored/ternary-bonsai-2-27b-tensorfold/`)
+
+| | |
+|--|--|
+| **Role** | 🟢 **Ternary Qwen3.8 27B** on TensorFold (DFlash2 drafts, exact verify) |
+| **Modality** | **Text only** (the MLX pack has a vision tower; TensorFold does not load it) |
+| **Engine / size** | TensorFold 0.3.6.3 · `prism-ml/Ternary-Bonsai-2-27B-mlx-2bit` ~8.5 GB + drafter `z-lab/Qwen3.8-27B-DFlash2` ~3.8 GB |
+| **API** | `:8091/v1` · Kilo: `tensorfold-bonsai/ternary-bonsai-2-27b-tensorfold` |
+| **Harness** | `loop_proxy.py` + `test_harness.py` (`--gate` on post-start) |
+| **Sampling** | Non-thinking `0.7 / 0.8 / top-k 20` (no presence penalty; TensorFold has no such flag). Thinking preset is per-request on the OpenCode `-think` model |
+| **Context** | 262144 (checkpoint max). Prompt plus reply |
+
+**Good for**
+
+- The same Bonsai 2 weights as the GGUF stack, with DFlash2 drafts on the M5 lane kernels
+- A smaller resident set than Qwen 3.8 4-bit (~8.5 GB vs ~16 GB, plus the shared drafter)
+
+**Not good for**
+
+- Image input — use `censored/ternary-bonsai-2-27b-gguf-llamacpp/` (`:8089`)
+- Co-loading with that GGUF sibling or with Qwen 3.8 TensorFold on 128 GB
 
 ---
 

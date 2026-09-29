@@ -17,6 +17,7 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`censored/qwen3-8-27b-coder-tensorfold/`](censored/qwen3-8-27b-coder-tensorfold/) | `tensorfold-qwen38/qwen3.8-27b-tensorfold` | 🟢 **Qwen 3.8 27B** (TensorFold + DFlash2; Vontra MLX 4-bit) | Text | `:8769/v1` |
 | [`censored/muse-glimmer-30b-mlx/`](censored/muse-glimmer-30b-mlx/) | `muse-glimmer/muse-glimmer-30b-mlx` | 🟢 **Muse Glimmer 30B** (mlx-vlm + DFlash; local agents) | **Text + image** | `:8087/v1` |
 | [`censored/ternary-bonsai-2-27b-gguf-llamacpp/`](censored/ternary-bonsai-2-27b-gguf-llamacpp/) | `bonsai/ternary-bonsai-2-27b` | 🟢 **Ternary Bonsai 2 27B** (ternary Qwen3.8; llama.cpp fork) | **Text + image** | `:8089/v1` |
+| [`censored/ternary-bonsai-2-27b-tensorfold/`](censored/ternary-bonsai-2-27b-tensorfold/) | `tensorfold-bonsai/ternary-bonsai-2-27b-tensorfold` | 🟢 **Ternary Bonsai 2 27B** (same model; TensorFold + DFlash2; MLX 2-bit) | Text | `:8091/v1` |
 | [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `ds4/deepseek-v4-flash` | 🟢 **Great for coding** (128 GB, native Metal) | Text | `:8083/v1` |
 | [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `deepseek-mlx/deepseek-v4-flash-2bit-dq` | 🟡 **Heavy coding** (128 GB, MLX) | Text | `:8082/v1` |
 | [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` | 🟢 Stock Gemma 4 31B IT (AtomicChat 2026-07-15) | Text | `:8080/v1` |
@@ -37,7 +38,7 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/) | `glm/glm-4.7-flash-heretic-q8` | 🟢 Uncensored MoE (Ollama) | Text | `:18083/v1` |
 | [`uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/`](uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/) | `orcasaq/orcasaq-2-cyber-27b` | 🟡 **OrcaSAQ-2 Cyber 27B** (uncensored Qwen3.8; security research; llama.cpp; gated GGUF) | Text | `:8090/v1` |
 
-**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Muse Glimmer (`8087`), YuE2 (`8088`), Ternary Bonsai 2 (`8089` proxy / `8099` engine), OrcaSAQ-2 Cyber 27B (`8090` proxy / `8100` engine), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Qwen 3.8 TensorFold (`8769`), Qwen 3.8 OBLITERATED mtplx (`8768` proxy / `8767` engine), Ornith 1.0 (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB. YuE2 is a song generator (`POST /generate`), not a Kilo chat-completions provider.
+**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Muse Glimmer (`8087`), YuE2 (`8088`), Ternary Bonsai 2 GGUF (`8089` proxy / `8099` engine), Ternary Bonsai 2 TensorFold (`8091` proxy / `8101` engine), OrcaSAQ-2 Cyber 27B (`8090` proxy / `8100` engine), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Qwen 3.8 TensorFold (`8769`), Qwen 3.8 OBLITERATED mtplx (`8768` proxy / `8767` engine), Ornith 1.0 (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB. YuE2 is a song generator (`POST /generate`), not a Kilo chat-completions provider.
 
 ---
 
@@ -60,7 +61,7 @@ cd censored/qwen3-6-27b-coder-mtplx
 
 Other stacks: `1_*` setup/download → `2_*` start → select the model ID for that folder (table above). Details in each directory’s README.
 
-**Kilo config layers:** monorepo root [`kilo.json`](kilo.json) is the global source of truth (providers + default model + harness prompts). Install it with **`./install_kilo.sh`** → `~/.config/kilo/kilo.jsonc`. Stack folders also have a local `kilo.json` (used when you launch Kilo from that directory). When changing harness rules or the default model for everyone, edit **root** `kilo.json` and re-run `./install_kilo.sh` — not only a stack file. The shared `Conclude decisively` block is the exception: it is inline in 18 agent prompts across four `kilo.json` files (Kilo's `instructions` resolves against the opened project, so it cannot reach them). Edit it once in [`AGENTS.md`](AGENTS.md) and run **`./sync_agent_prompts.py`**; `install_kilo.sh` refuses to install if a copy has drifted. Current default: **`muse-glimmer/muse-glimmer-30b-mlx`**.
+**Kilo config layers:** monorepo root [`kilo.json`](kilo.json) is the global source of truth (providers + default model + harness prompts). Install it with **`./install_kilo.sh`** → `~/.config/kilo/kilo.jsonc`. Stack folders also have a local `kilo.json` (used when you launch Kilo from that directory). When changing harness rules or the default model for everyone, edit **root** `kilo.json` and re-run `./install_kilo.sh` — not only a stack file. The shared `Conclude decisively` block is the exception: it is inline in every agent prompt that carries it, across the `kilo.json` files listed in `sync_agent_prompts.py` (Kilo's `instructions` resolves against the opened project, so it cannot reach them). Edit it once in [`AGENTS.md`](AGENTS.md) and run **`./sync_agent_prompts.py`**; `install_kilo.sh` refuses to install if a copy has drifted. Current default: **`muse-glimmer/muse-glimmer-30b-mlx`**.
 
 ---
 
@@ -72,6 +73,7 @@ Other stacks: `1_*` setup/download → `2_*` start → select the model ID for t
 |------|-----|------------|
 | Snappy Kilo tool loops | 🟢 **Qwen 3.6** (or 🟡 **Qwen 3.8** when weights are up) | Uncensored needs; frontier-level greenfield apps |
 | Qwen 3.8 27B via TensorFold (DFlash2, M5 lane kernels) | 🟢 **Qwen 3.8 TensorFold** (`:8769`) | Co-loading Qwen 3.8 mtplx; need the mtplx checkpoint |
+| Ternary Bonsai 2 27B, faster MLX decode | 🟢 **Bonsai TensorFold** (`:8091`, DFlash2, text) | Image input (use the GGUF sibling on `:8089`); co-loading either Bonsai or Qwen 3.8 TensorFold |
 | Great for coding — hard multi-file / SWE-style (128 GB, native Metal) | 🟢 **DeepSeek V4 Flash (ds4)** | You need snappy loops; RAM ≪ 128 GB |
 | Hard multi-file via MLX | 🟡 **DeepSeek V4 Flash MLX** | Prefer ds4 for official GGUF path; RAM ≪ 128 GB |
 | Aligned Gemma 31B | 🟢 **Gemma stock IT** | Same limits as Heretic for heavy agents |
@@ -113,6 +115,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 | 🟢 | [`censored/qwen3-8-27b-coder-tensorfold/`](censored/qwen3-8-27b-coder-tensorfold/) | `http://127.0.0.1:8769/v1` | `tensorfold-qwen38/qwen3.8-27b-tensorfold` |
 | 🟢 | [`censored/muse-glimmer-30b-mlx/`](censored/muse-glimmer-30b-mlx/) | `http://127.0.0.1:8087/v1` | `muse-glimmer/muse-glimmer-30b-mlx` |
 | 🟢 | [`censored/ternary-bonsai-2-27b-gguf-llamacpp/`](censored/ternary-bonsai-2-27b-gguf-llamacpp/) | `http://127.0.0.1:8089/v1` | `bonsai/ternary-bonsai-2-27b` |
+| 🟢 | [`censored/ternary-bonsai-2-27b-tensorfold/`](censored/ternary-bonsai-2-27b-tensorfold/) | `http://127.0.0.1:8091/v1` | `tensorfold-bonsai/ternary-bonsai-2-27b-tensorfold` |
 | 🟢 | [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `http://127.0.0.1:8083/v1` | `ds4/deepseek-v4-flash` |
 | 🟡 | [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `http://127.0.0.1:8082/v1` | `deepseek-mlx/deepseek-v4-flash-2bit-dq` |
 | 🟢 | [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` |
@@ -150,6 +153,8 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 - [diffusiongemma4 README](censored/diffusiongemma4-26b-a4b-mlx/README-diffusiongemma4.md) · [ornith README](censored/ornith-1.0-35b-q8-gguf-ollama/README.md)  
 - [gemma4 stock IT AtomicChat 2026-07-15](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/README.md)  
 - [YuE2-3B MLX](censored/yue2-3b-mlx/README.md) — lyrics/style → 48 kHz song (`lyra` / yue2-mlx; not a Kilo chat model)  
+- [ternary-bonsai-2-27b-tensorfold/README.md](censored/ternary-bonsai-2-27b-tensorfold/README.md) — Bonsai 2 MLX 2-bit on TensorFold + DFlash2 (`:8091`, text)
+- [ternary-bonsai-2-27b-gguf-llamacpp/README.md](censored/ternary-bonsai-2-27b-gguf-llamacpp/README.md) — Bonsai 2 GGUF on the PrismML llama.cpp fork (`:8089`, text + image)
 
 
 **Uncensored**

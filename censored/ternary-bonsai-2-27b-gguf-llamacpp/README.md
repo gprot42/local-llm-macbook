@@ -24,7 +24,7 @@ Don't chase more config to fix quality — work around it with task scope and a 
 
 Bonsai 2 packs are stored in a **rotated basis**: each weight matrix is transformed by a blockwise Hadamard rotation before ternary assignment, and the runtime must apply the matching transform to activations. The pack declares `model_type: prism_hadamard_qwen35` / `requires_runtime: true`.
 
-- **MLX packs cannot be served.** `mlx_lm.server` / `mlx_vlm.server` don't use the bundled loader; PrismML's own `start_mlx_server.sh` **refuses Bonsai 2**, warning it "would return wrong output with no error." (The MLX build is one‑shot generation only.)
+- **Stock MLX still cannot serve the pack.** `mlx_lm.server` / `mlx_vlm.server` don't use the bundled loader; PrismML's own `start_mlx_server.sh` **refuses Bonsai 2**, warning it "would return wrong output with no error." TensorFold 0.3.6.3+ does serve the MLX 2-bit pack (text only, DFlash2). That stack is [`../ternary-bonsai-2-27b-tensorfold/`](../ternary-bonsai-2-27b-tensorfold/) on `:8091`. This folder is the one with image input.
 - **The `PQ2_0` (group‑128) GGUF needs the fork's kernels** — stock llama.cpp / Ollama lack them.
 
 So this stack builds PrismML's llama.cpp fork from source and serves the GGUF. Source of truth: [PrismML‑Eng/Bonsai‑demo](https://github.com/PrismML-Eng/Bonsai-demo).

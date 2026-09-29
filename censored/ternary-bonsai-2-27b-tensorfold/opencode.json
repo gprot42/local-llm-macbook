@@ -1,0 +1,112 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "bonsai-tensorfold/ternary-bonsai-2-27b-tensorfold",
+  "small_model": "bonsai-tensorfold/ternary-bonsai-2-27b-tensorfold",
+  "default_agent": "build",
+  "shell": "/bin/bash",
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "grep": "allow",
+    "glob": "allow",
+    "list": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "skill": "allow",
+    "todowrite": "allow",
+    "lsp": "allow",
+    "task": "allow",
+    "question": "allow",
+    "bash": {
+      "*": "allow",
+      "rm -rf /*": "deny",
+      "rm -rf ~/*": "deny",
+      "sudo *": "ask"
+    },
+    "external_directory": {
+      "*": "ask",
+      "/tmp/**": "allow",
+      "~/.cache/**": "allow"
+    }
+  },
+  "lsp": true,
+  "formatter": true,
+  "compaction": {
+    "auto": true,
+    "prune": true
+  },
+  "agent": {
+    "build": {
+      "prompt": "You are an agentic coding assistant in OpenCode on a local model. Your first action on any coding request must be a write or edit tool call — never reply with only a plan or description. Use write/edit for files and bash only when execution is required. Do not use todo lists. Do not say what you will do; do it immediately with tools.\n\nRules that prevent wasted hours:\n1. Never run a server, watcher, or any long-running process in the foreground with bash: the tool kills it when its timeout expires and nothing stays up, and a larger timeout does not fix that. If a process must keep running, start it detached — `nohup <cmd> > /tmp/<name>.log 2>&1 &` — then check the log file. For static HTML/JS, do not serve at all: run `node --check <file>.js`, then tell the user to open the .html file directly in a browser.\n2. Never repeat a command that already ran with the same result, whether it failed or succeeded. Two identical results means stop: change the approach, or report what you tried and what it printed. Do not run that command again.\n3. Once the requested files are written and checked, stop. End with what changed, how it was verified (exact command + result), and how the user runs it. Do not loop on verification.",
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "grep": "allow",
+        "glob": "allow",
+        "list": "allow",
+        "webfetch": "allow",
+        "skill": "allow",
+        "todowrite": "deny",
+        "lsp": "allow",
+        "task": "allow"
+      }
+    },
+    "plan": {
+      "permission": {
+        "bash": "ask",
+        "edit": "deny"
+      }
+    }
+  },
+  "provider": {
+    "bonsai-tensorfold": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ternary Bonsai 2 27B (TensorFold, local)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8091/v1",
+        "apiKey": "local",
+        "timeout": false,
+        "chunkTimeout": 900000
+      },
+      "models": {
+        "ternary-bonsai-2-27b-tensorfold": {
+          "name": "Ternary Bonsai 2 27B — TensorFold MLX 2-bit (text, thinking off)",
+          "reasoning": false,
+          "tool_call": true,
+          "temperature": false,
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "ternary-bonsai-2-27b-tensorfold-think": {
+          "name": "Ternary Bonsai 2 27B TensorFold — thinking (medium, 1024-token budget)",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          },
+          "options": {
+            "chat_template_kwargs": { "enable_thinking": true },
+            "reasoning_effort": "medium",
+            "thinking_budget": 1024,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20
+          }
+        }
+      }
+    }
+  }
+}
