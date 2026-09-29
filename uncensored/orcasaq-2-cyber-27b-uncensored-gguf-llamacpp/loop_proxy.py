@@ -273,6 +273,17 @@ class Proxy(BaseHTTPRequestHandler):
         sys.stderr.write("[loop-proxy] " + (fmt % args) + "\n")
         sys.stderr.flush()
 
+    def handle(self) -> None:
+        # A client (OpenCode) that aborts a request — Esc, a timeout, or the
+        # synthetic stop we just sent — drops the socket, so the next read or
+        # write raises BrokenPipeError/ConnectionResetError from inside
+        # http.server. That means the caller left, not a proxy fault: end the
+        # connection quietly instead of logging a traceback per aborted stream.
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
     def do_GET(self) -> None:  # noqa: N802
         self._forward(b"")
 
@@ -425,6 +436,7 @@ def _self_test() -> None:
     _, stop_text, _ = decide(repeated(4))
     assert "python3 scan.py" in stop_text and '"continue" will repeat it' in stop_text
     _stream_self_test()
+    _handle_guard_self_test()
     print("loop_proxy self-test ok")
 
 
@@ -481,6 +493,28 @@ def _stream_self_test() -> None:
         proxy.shutdown()
         upstream.shutdown()
         Proxy.upstream_host, Proxy.upstream_port = saved
+
+
+def _handle_guard_self_test() -> None:
+    """handle() swallows a client-disconnect raised by the base handler and ends
+    the connection, instead of letting it surface as a per-request traceback."""
+
+    import http.server
+
+    base = http.server.BaseHTTPRequestHandler
+    original = base.handle
+    try:
+        for exc in (BrokenPipeError(32, "Broken pipe"), ConnectionResetError()):
+            def raising(self, _exc=exc):
+                raise _exc
+
+            base.handle = raising
+            handler = Proxy.__new__(Proxy)
+            handler.close_connection = False
+            handler.handle()  # must not raise
+            assert handler.close_connection is True, "handle() must end the connection"
+    finally:
+        base.handle = original
 
 
 def main() -> None:
