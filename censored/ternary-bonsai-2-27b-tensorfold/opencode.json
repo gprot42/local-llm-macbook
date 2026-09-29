@@ -76,8 +76,8 @@
           "tool_call": true,
           "temperature": false,
           "limit": {
-            "context": 262144,
-            "output": 32768
+            "context": 49152,
+            "output": 16384
           },
           "modalities": {
             "input": ["text"],
@@ -90,8 +90,8 @@
           "tool_call": true,
           "temperature": true,
           "limit": {
-            "context": 262144,
-            "output": 32768
+            "context": 49152,
+            "output": 16384
           },
           "modalities": {
             "input": ["text"],
