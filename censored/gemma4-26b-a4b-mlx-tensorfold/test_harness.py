@@ -9,7 +9,7 @@ Usage:
   python3 test_harness.py --base http://127.0.0.1:8092 --strict
   python3 test_harness.py --gate     # post-start gate (critical live only)
   python3 test_harness.py --quick    # skip slower multi-turn / concurrent tests
-  python3 test_harness.py --model gemma-4-26b-a4b-heretic-tensorfold
+  python3 test_harness.py --model gemma-4-26b-a4b-tensorfold
 
 We do NOT fully emulate Kilo (no session DB, compaction UI, permissions).
 
@@ -33,7 +33,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 DEFAULT_BASE = "http://127.0.0.1:8092"
-DEFAULT_MODEL = "gemma-4-26b-a4b-heretic-tensorfold"
+DEFAULT_MODEL = "gemma-4-26b-a4b-tensorfold"
 
 TOOLS = [
     {
@@ -745,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help="Model id (default gemma-4-26b-a4b-heretic-tensorfold; auto-resolved from /v1/models)",
+        help="Model id (default gemma-4-26b-a4b-tensorfold; auto-resolved from /v1/models)",
     )
     ap.add_argument(
         "--gate",

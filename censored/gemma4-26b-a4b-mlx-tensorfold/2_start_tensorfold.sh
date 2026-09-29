@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 2_start_tensorfold.sh — TensorFold OpenAI server for Gemma 4 26B-A4B (heretic)
+# 2_start_tensorfold.sh — TensorFold OpenAI server for Gemma 4 26B-A4B (base, censored)
 #
 # Listens at http://127.0.0.1:8092/v1
 # The engine itself is on :8102. loop_proxy.py owns :8092 and refuses a tool
 # call that has already returned the same result twice.
 # Gemma 4 runs on TensorFold's gemma4 lane (MoE-only kernels): this is the
-# uncensored/heretic MoE pack. Do not use :8080 (Gemma/Diffusion stacks).
+# base (censored) MoE pack. Do not use :8080 (Gemma/Diffusion stacks).
 #
 # Thinking is off by default, so tool calls are not wrapped in a think block.
 # Pass --thinking to turn it on.
@@ -163,7 +163,7 @@ source "${CONFIG_FILE}"
 if [[ -n "${MODEL_OVERRIDE}" ]]; then
     HF_MODEL="${MODEL_OVERRIDE}"
 fi
-MODEL_ALIAS="${MODEL_ALIAS:-gemma-4-26b-a4b-heretic-tensorfold}"
+MODEL_ALIAS="${MODEL_ALIAS:-gemma-4-26b-a4b-tensorfold}"
 CONTEXT="${CONTEXT:-131072}"
 if [[ -n "${CLI_CONTEXT}" ]]; then
     CONTEXT="${CLI_CONTEXT}"
@@ -249,7 +249,7 @@ cleanup() {
 }
 trap cleanup INT TERM HUP
 
-echo "=== Gemma 4 26B-A4B (heretic) — TensorFold ==="
+echo "=== Gemma 4 26B-A4B (base) — TensorFold ==="
 echo "→ Model:    ${HF_MODEL}"
 echo "→ Drafter:  ${DRAFTER:-none}"
 echo "→ Alias:    ${MODEL_ALIAS}"
@@ -333,7 +333,7 @@ echo "  READY — TensorFold serving ${HF_MODEL}"
 echo "============================================================"
 echo "  API:        http://127.0.0.1:${PORT}/v1"
 echo "  Model ID:   ${LIVE_MODEL_ID}"
-echo "  Kilo:       tensorfold-gemma4/gemma-4-26b-a4b-heretic-tensorfold  (kilo.json)"
+echo "  Kilo:       tensorfold-gemma4/gemma-4-26b-a4b-tensorfold  (kilo.json)"
 echo "  curl:       curl http://127.0.0.1:${PORT}/v1/chat/completions \\"
 echo "                -H 'Content-Type: application/json' \\"
 echo "                -d '{\"model\":\"${MODEL_ALIAS}\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"max_tokens\":32}'"

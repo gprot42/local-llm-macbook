@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 1_setup_download.sh — Install TensorFold and download Gemma 4 26B-A4B (heretic)
+# 1_setup_download.sh — Install TensorFold and download Gemma 4 26B-A4B (base, censored)
 #
 # TensorFold (https://github.com/ashhart/TensorFold) serves Gemma 4 on its
 # gemma4 lane. The kernels cover the MoE checkpoints only (enable_moe_block in
 # every layer) and read MLX 4-bit weights in groups of 32/64 with an 8-bit
-# router. This uncensored/heretic pack is that MoE checkpoint; the 31B dense
+# router. This base pack is that MoE checkpoint; the 31B dense
 # Gemma 4 packs are a different architecture the lane refuses.
 #
 #   HF model   mlx-community/gemma-4-26b-a4b-it-4bit  (~15 GB, MoE 26B-A4B; base, censored)
@@ -33,7 +33,7 @@ CONFIG_FILE="${SCRIPT_DIR}/.tensorfold_config"
 
 DEFAULT_MODEL="mlx-community/gemma-4-26b-a4b-it-4bit"
 DEFAULT_DRAFTER="z-lab/gemma-4-26B-A4B-it-DFlash"
-MODEL_ALIAS="${GEMMA4_ALIAS:-gemma-4-26b-a4b-heretic-tensorfold}"
+MODEL_ALIAS="${GEMMA4_ALIAS:-gemma-4-26b-a4b-tensorfold}"
 CONTEXT="${GEMMA4_CONTEXT:-131072}"
 
 DEPS_ONLY=false

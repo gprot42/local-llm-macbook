@@ -4,7 +4,7 @@
 #
 # Merges the gemma4-tensorfold provider from ./opencode.json into
 # ~/.config/opencode/opencode.json. Other providers stay. Sets model and
-# small_model to gemma4-tensorfold/gemma-4-26b-a4b-heretic-tensorfold. Does not touch agent
+# small_model to gemma4-tensorfold/gemma-4-26b-a4b-tensorfold. Does not touch agent
 # prompts or permissions.
 #
 # Usage:

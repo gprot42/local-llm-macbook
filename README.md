@@ -156,7 +156,7 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 - [gemma4 stock IT AtomicChat 2026-07-15](censored/archive/gemma4-server-atomicchat-mlx-31b-2026-07-15/README.md)  
 - [YuE2-3B MLX](censored/yue2-3b-mlx/README.md) — lyrics/style → 48 kHz song (`lyra` / yue2-mlx; not a Kilo chat model)  
 - [ternary-bonsai-2-27b-tensorfold/README.md](censored/ternary-bonsai-2-27b-tensorfold/README.md) — Bonsai 2 MLX 2-bit on TensorFold + DFlash2 (`:8091`, text)
-- [gemma4-26b-a4b-heretic-mlx-tensorfold/README.md](uncensored/gemma4-26b-a4b-heretic-mlx-tensorfold/README.md) — Gemma 4 26B-A4B MoE (heretic) on TensorFold + DFlash (`:8092`, text)
+- [gemma4-26b-a4b-heretic-mlx-tensorfold/README.md](censored/gemma4-26b-a4b-mlx-tensorfold/README.md) — Gemma 4 26B-A4B MoE (base, censored) on TensorFold + DFlash (`:8092`, text)
 - [nemotron-3.5-lightning-30b-a3b-mlx-tensorfold/README.md](censored/nemotron-3.5-lightning-30b-a3b-mlx-tensorfold/README.md) — Nemotron 3.5 Lightning 30B-A3B on TensorFold nemotron_h (MTP self-draft, `:8093`, text)
 - [ternary-bonsai-2-27b-gguf-llamacpp/README.md](censored/ternary-bonsai-2-27b-gguf-llamacpp/README.md) — Bonsai 2 GGUF on the PrismML llama.cpp fork (`:8089`, text + image)
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "tensorfold-gemma4/gemma-4-26b-a4b-heretic-tensorfold",
+  "model": "tensorfold-gemma4/gemma-4-26b-a4b-tensorfold",
   "agent": {
     "build": {
       "temperature": 1.0,
@@ -47,7 +47,7 @@
   },
   "provider": {
     "tensorfold-gemma4": {
-      "name": "TensorFold Gemma 4 26B-A4B heretic (local)",
+      "name": "TensorFold Gemma 4 26B-A4B (base, local)",
       "options": {
         "apiKey": "local",
         "baseURL": "http://127.0.0.1:8092/v1",
@@ -56,8 +56,8 @@
         "chunkTimeout": 300000
       },
       "models": {
-        "gemma-4-26b-a4b-heretic-tensorfold": {
-          "name": "Gemma 4 26B-A4B heretic — TensorFold (coding / agents)",
+        "gemma-4-26b-a4b-tensorfold": {
+          "name": "Gemma 4 26B-A4B base — TensorFold (coding / agents)",
           "tool_call": true,
           "limit": {
             "context": 49152,

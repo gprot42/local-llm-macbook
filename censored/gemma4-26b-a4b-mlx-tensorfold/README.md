@@ -1,6 +1,6 @@
-# Gemma 4 26B-A4B (heretic) — TensorFold
+# Gemma 4 26B-A4B (base) — TensorFold
 
-Run the **uncensored/heretic Gemma 4 26B-A4B** MoE on Apple Silicon with
+Run the **base (censored) Gemma 4 26B-A4B** MoE on Apple Silicon with
 [TensorFold](https://github.com/ashhart/TensorFold) 0.3.6.3 (family `gemma4`).
 Text output. This is the **MoE** checkpoint (26B total / 4B active); TensorFold's
 Gemma 4 kernels cover the MoE layout only and **refuse the 31B dense** packs, so
@@ -42,10 +42,10 @@ OpenCode, after the server is up:
 
 That merges the `gemma4-tensorfold` provider into
 `~/.config/opencode/opencode.json` and sets the default model to
-`gemma4-tensorfold/gemma-4-26b-a4b-heretic-tensorfold`. Other providers stay.
+`gemma4-tensorfold/gemma-4-26b-a4b-tensorfold`. Other providers stay.
 Restart OpenCode if it is already open.
 
-Kilo id: `tensorfold-gemma4/gemma-4-26b-a4b-heretic-tensorfold`.
+Kilo id: `tensorfold-gemma4/gemma-4-26b-a4b-tensorfold`.
 
 ## Architecture
 

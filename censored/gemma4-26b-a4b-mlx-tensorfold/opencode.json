@@ -1,11 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "gemma4-tensorfold/gemma-4-26b-a4b-heretic-tensorfold",
-  "small_model": "gemma4-tensorfold/gemma-4-26b-a4b-heretic-tensorfold",
+  "model": "gemma4-tensorfold/gemma-4-26b-a4b-tensorfold",
+  "small_model": "gemma4-tensorfold/gemma-4-26b-a4b-tensorfold",
   "provider": {
     "gemma4-tensorfold": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "TensorFold Gemma 4 26B-A4B heretic (local)",
+      "name": "TensorFold Gemma 4 26B-A4B (base, local)",
       "options": {
         "baseURL": "http://127.0.0.1:8092/v1",
         "apiKey": "local",
@@ -13,8 +13,8 @@
         "chunkTimeout": 900000
       },
       "models": {
-        "gemma-4-26b-a4b-heretic-tensorfold": {
-          "name": "Gemma 4 26B-A4B heretic — TensorFold (DFlash, thinking off)",
+        "gemma-4-26b-a4b-tensorfold": {
+          "name": "Gemma 4 26B-A4B base — TensorFold (DFlash, thinking off)",
           "reasoning": false,
           "tool_call": true,
           "temperature": false,
