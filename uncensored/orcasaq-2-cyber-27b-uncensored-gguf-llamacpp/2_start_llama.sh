@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${SCRIPT_DIR}/engine/build/bin/llama-server"
 MODELS_DIR="${SCRIPT_DIR}/models"
 MODEL="${MODELS_DIR}/OrcaSAQ-2-27B-Uncensored.gguf"
-ALIAS=orcasaq-2-cyber-27b
+ALIAS=orcasaq/orca
 HOST=127.0.0.1
 PORT=8090
 # loop_proxy.py owns the public port and forwards to llama-server on the engine

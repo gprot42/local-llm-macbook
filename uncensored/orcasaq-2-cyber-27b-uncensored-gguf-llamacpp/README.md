@@ -7,7 +7,7 @@ Local **OrcaSAQ-2 Cyber 27B Uncensored** ([orcarouter](https://huggingface.co/or
 | | |
 |--|--|
 | **API** | `http://127.0.0.1:8090/v1` (loop proxy → engine `:8100`) |
-| **Model IDs** | `orcasaq/orcasaq-2-cyber-27b` (default, no thinking) · `orcasaq/orcasaq-2-cyber-27b-think` (OpenCode, 1024‑token thinking budget) |
+| **Model IDs** | `orcasaq/orca` (default, no thinking) · `orcasaq/orca-think` (OpenCode, 1024‑token thinking budget) |
 | **Weights** | [`orcarouter/OrcaSAQ-2-Cyber-27B-Uncensored-GGUF`](https://huggingface.co/orcarouter/OrcaSAQ-2-Cyber-27B-Uncensored-GGUF) · `OrcaSAQ-2-27B-Uncensored.gguf` (15.7 GB) — **gated** |
 | **Engine** | [PrismML's llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp) (Metal) on `:8100`, `--jinja` tool calling, single slot + 24 GiB RAM prompt cache — behind `loop_proxy.py` on `:8090`, which ends a turn that repeats itself |
 

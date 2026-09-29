@@ -4,7 +4,7 @@
 #
 # Merges the orcasaq provider from ./opencode.json into
 # ~/.config/opencode/opencode.json (preserves your other providers).
-# Sets model + small_model to orcasaq/orcasaq-2-cyber-27b and installs the
+# Sets model + small_model to orcasaq/orca and installs the
 # build agent's prompt (anti-loop rules); other agent settings are untouched.
 #
 # Usage:

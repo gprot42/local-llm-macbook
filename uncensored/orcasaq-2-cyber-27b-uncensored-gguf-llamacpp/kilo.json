@@ -1,6 +1,6 @@
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "orcasaq/orcasaq-2-cyber-27b",
+  "model": "orcasaq/orca",
   "agent": {
     "build": {
       "temperature": 0.7,
@@ -73,12 +73,16 @@
         "chunkTimeout": 900000
       },
       "models": {
-        "orcasaq-2-cyber-27b": {
-          "name": "OrcaSAQ-2 Cyber 27B — uncensored Qwen3.8-27B (GGUF)",
+        "orca": {
+          "name": "Orca 27B — no thinking",
           "tool_call": true,
           "modalities": {
-            "input": ["text"],
-            "output": ["text"]
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
           },
           "limit": {
             "context": 49152,
