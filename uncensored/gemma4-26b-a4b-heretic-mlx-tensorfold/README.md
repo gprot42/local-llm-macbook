@@ -11,7 +11,7 @@ other model ports in this repo.
 
 | | Hugging Face | Size |
 |--|--|--|
-| Model | `Jiunsong/supergemma4-26b-uncensored-mlx-4bit-v2` | ~15 GB |
+| Model | `mlx-community/gemma-4-26b-a4b-it-4bit` (base, censored) | ~15 GB |
 | Drafter | `z-lab/gemma-4-26B-A4B-it-DFlash` | ~0.8 GB |
 
 The pack is `model_type: gemma4`, `enable_moe_block: true` (128 experts, top-8),
@@ -58,7 +58,7 @@ loop_proxy.py            (repeat guard, :8092)
     ▼
 tensorfold serve         (gemma4 lane, DFlash drafter then exact verify, :8102)
     ▼
-Jiunsong/supergemma4-26b-uncensored-mlx-4bit-v2
+mlx-community/gemma-4-26b-a4b-it-4bit
 ```
 
 `./1_setup_download.sh --no-drafter` skips the DFlash drafter (one token per round).
