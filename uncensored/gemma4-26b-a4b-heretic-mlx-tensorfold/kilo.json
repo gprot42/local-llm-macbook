@@ -1,0 +1,70 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "tensorfold-gemma4/gemma-4-26b-a4b-heretic-tensorfold",
+  "agent": {
+    "build": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    },
+    "plan": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "bash": {
+      "*": "ask",
+      "ls *": "allow",
+      "pwd *": "allow",
+      "cat *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "less *": "allow",
+      "tree *": "allow",
+      "echo *": "allow",
+      "wc *": "allow",
+      "which *": "allow",
+      "type *": "allow",
+      "file *": "allow",
+      "diff *": "allow",
+      "touch *": "allow",
+      "mkdir *": "allow",
+      "cp *": "allow",
+      "mv *": "allow",
+      "tsc *": "allow",
+      "tsgo *": "allow",
+      "tar *": "allow",
+      "unzip *": "allow",
+      "gzip *": "allow",
+      "gunzip *": "allow",
+      "adb *": "allow"
+    }
+  },
+  "provider": {
+    "tensorfold-gemma4": {
+      "name": "TensorFold Gemma 4 26B-A4B heretic (local)",
+      "options": {
+        "apiKey": "local",
+        "baseURL": "http://127.0.0.1:8092/v1",
+        "timeout": 900000,
+        "headerTimeout": 180000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "gemma-4-26b-a4b-heretic-tensorfold": {
+          "name": "Gemma 4 26B-A4B heretic — TensorFold (coding / agents)",
+          "tool_call": true,
+          "limit": {
+            "context": 49152,
+            "output": 16384
+          }
+        }
+      }
+    }
+  }
+}

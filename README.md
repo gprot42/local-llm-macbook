@@ -18,6 +18,7 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`censored/muse-glimmer-30b-mlx/`](censored/muse-glimmer-30b-mlx/) | `muse-glimmer/muse-glimmer-30b-mlx` | 🟢 **Muse Glimmer 30B** (mlx-vlm + DFlash; local agents) | **Text + image** | `:8087/v1` |
 | [`censored/ternary-bonsai-2-27b-gguf-llamacpp/`](censored/ternary-bonsai-2-27b-gguf-llamacpp/) | `bonsai/ternary-bonsai-2-27b` | 🟢 **Ternary Bonsai 2 27B** (ternary Qwen3.8; llama.cpp fork) | **Text + image** | `:8089/v1` |
 | [`censored/ternary-bonsai-2-27b-tensorfold/`](censored/ternary-bonsai-2-27b-tensorfold/) | `tensorfold-bonsai/ternary-bonsai-2-27b-tensorfold` | 🟢 **Ternary Bonsai 2 27B** (same model; TensorFold + DFlash2; MLX 2-bit) | Text | `:8091/v1` |
+| [`uncensored/gemma4-26b-a4b-heretic-mlx-tensorfold/`](uncensored/gemma4-26b-a4b-heretic-mlx-tensorfold/) | `tensorfold-gemma4/gemma-4-26b-a4b-heretic-tensorfold` | 🟡 **Gemma 4 26B-A4B heretic** (MoE; TensorFold + DFlash; uncensored, text) | Text | `:8092/v1` |
 | [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `ds4/deepseek-v4-flash` | 🟢 **Great for coding** (128 GB, native Metal) | Text | `:8083/v1` |
 | [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `deepseek-mlx/deepseek-v4-flash-2bit-dq` | 🟡 **Heavy coding** (128 GB, MLX) | Text | `:8082/v1` |
 | [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` | 🟢 Stock Gemma 4 31B IT (AtomicChat 2026-07-15) | Text | `:8080/v1` |
@@ -36,9 +37,9 @@ After `./1_setup_download.sh` + `./2_start_*.sh` in a folder, pick the matching 
 | [`uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/) | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` | 📦 Archived (weights removed) | Text | `:8085/v1` |
 | [`uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/) | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` | 📦 Archived DFlash (weights removed) | Text | `:8086/v1` |
 | [`uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/) | `glm/glm-4.7-flash-heretic-q8` | 🟢 Uncensored MoE (Ollama) | Text | `:18083/v1` |
-| [`uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/`](uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/) | `orcasaq/orcasaq-2-cyber-27b` | 🟡 **OrcaSAQ-2 Cyber 27B** (uncensored Qwen3.8; security research; llama.cpp; gated GGUF) | Text | `:8090/v1` |
+| [`uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/`](uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/) | `orcasaq/orca` | 🟡 **OrcaSAQ-2 Cyber 27B** (uncensored Qwen3.8; security research; llama.cpp; gated GGUF) | Text | `:8090/v1` |
 
-**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Muse Glimmer (`8087`), YuE2 (`8088`), Ternary Bonsai 2 GGUF (`8089` proxy / `8099` engine), Ternary Bonsai 2 TensorFold (`8091` proxy / `8101` engine), OrcaSAQ-2 Cyber 27B (`8090` proxy / `8100` engine), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Qwen 3.8 TensorFold (`8769`), Qwen 3.8 OBLITERATED mtplx (`8768` proxy / `8767` engine), Ornith 1.0 (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB. YuE2 is a song generator (`POST /generate`), not a Kilo chat-completions provider.
+**Ports:** `8080` is shared (Gemma / Diffusion) — one of those at a time. DeepSeek ds4 (`8083`), DeepSeek MLX (`8082`), Qwen3-32B Heretic (`8084`), Qwen3.5-122B Abliterated (`8085`), Qwen3.5-122B DFlash (`8086`), Muse Glimmer (`8087`), YuE2 (`8088`), Ternary Bonsai 2 GGUF (`8089` proxy / `8099` engine), Ternary Bonsai 2 TensorFold (`8091` proxy / `8101` engine), Gemma 4 26B-A4B TensorFold (`8092` proxy / `8102` engine), OrcaSAQ-2 Cyber 27B (`8090` proxy / `8100` engine), Qwen 3.6 mtplx (`8765`), Qwen 3.8 mtplx (`8766`), Qwen 3.8 TensorFold (`8769`), Qwen 3.8 OBLITERATED mtplx (`8768` proxy / `8767` engine), Ornith 1.0 (`18082`), and GLM (`18083`) can run together — but do **not** load multiple huge models at once on 128 GB. YuE2 is a song generator (`POST /generate`), not a Kilo chat-completions provider.
 
 ---
 
@@ -116,6 +117,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 | 🟢 | [`censored/muse-glimmer-30b-mlx/`](censored/muse-glimmer-30b-mlx/) | `http://127.0.0.1:8087/v1` | `muse-glimmer/muse-glimmer-30b-mlx` |
 | 🟢 | [`censored/ternary-bonsai-2-27b-gguf-llamacpp/`](censored/ternary-bonsai-2-27b-gguf-llamacpp/) | `http://127.0.0.1:8089/v1` | `bonsai/ternary-bonsai-2-27b` |
 | 🟢 | [`censored/ternary-bonsai-2-27b-tensorfold/`](censored/ternary-bonsai-2-27b-tensorfold/) | `http://127.0.0.1:8091/v1` | `tensorfold-bonsai/ternary-bonsai-2-27b-tensorfold` |
+| 🟡 | [`uncensored/gemma4-26b-a4b-heretic-mlx-tensorfold/`](uncensored/gemma4-26b-a4b-heretic-mlx-tensorfold/) | `http://127.0.0.1:8092/v1` | `tensorfold-gemma4/gemma-4-26b-a4b-heretic-tensorfold` |
 | 🟢 | [`censored/deepseek-v4-flash-ds4/`](censored/deepseek-v4-flash-ds4/) | `http://127.0.0.1:8083/v1` | `ds4/deepseek-v4-flash` |
 | 🟡 | [`censored/deepseek-v4-flash-2bit-dq-mlx/`](censored/deepseek-v4-flash-2bit-dq-mlx/) | `http://127.0.0.1:8082/v1` | `deepseek-mlx/deepseek-v4-flash-2bit-dq` |
 | 🟢 | [`censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/`](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/) | `http://localhost:8080/v1` | `openai-compatible/gemma-4-31b-it-atomicchat-mlx-4bit` |
@@ -133,7 +135,7 @@ Config order: `.kilo/kilo.jsonc` → project `kilo.json` → `~/.config/kilo/kil
 | 📦 | [`uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/`](uncensored/archived/qwen3.5-122b-a10b-abliterated-mlx/) | `http://127.0.0.1:8085/v1` | `qwen35-122b-abliterated/qwen3.5-122b-a10b-abliterated-mlx-4bit` |
 | 📦 | [`uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/`](uncensored/archived/qwen3.5-122b-a10b-dflash-mlx/) | `http://127.0.0.1:8086/v1` | `qwen35-122b-dflash/qwen3.5-122b-a10b-dflash` |
 | 🟢 | [`uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/`](uncensored/glm-4.7-flash-heretic-30b-a3b-gguf-ollama/) | `http://127.0.0.1:18083/v1` | `glm/glm-4.7-flash-heretic-q8` |
-| 🟡 | [`uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/`](uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/) | `http://127.0.0.1:8090/v1` | `orcasaq/orcasaq-2-cyber-27b` |
+| 🟡 | [`uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/`](uncensored/orcasaq-2-cyber-27b-uncensored-gguf-llamacpp/) | `http://127.0.0.1:8090/v1` | `orcasaq/orca` |
 
 Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks — macOS may resolve `localhost` to `::1`.
 
@@ -154,6 +156,7 @@ Use **`127.0.0.1`** (not `localhost`) for ds4 / deepseek-mlx / Ollama stacks —
 - [gemma4 stock IT AtomicChat 2026-07-15](censored/gemma4-server-atomicchat-mlx-31b-2026-07-15/README.md)  
 - [YuE2-3B MLX](censored/yue2-3b-mlx/README.md) — lyrics/style → 48 kHz song (`lyra` / yue2-mlx; not a Kilo chat model)  
 - [ternary-bonsai-2-27b-tensorfold/README.md](censored/ternary-bonsai-2-27b-tensorfold/README.md) — Bonsai 2 MLX 2-bit on TensorFold + DFlash2 (`:8091`, text)
+- [gemma4-26b-a4b-heretic-mlx-tensorfold/README.md](uncensored/gemma4-26b-a4b-heretic-mlx-tensorfold/README.md) — Gemma 4 26B-A4B MoE (heretic) on TensorFold + DFlash (`:8092`, text)
 - [ternary-bonsai-2-27b-gguf-llamacpp/README.md](censored/ternary-bonsai-2-27b-gguf-llamacpp/README.md) — Bonsai 2 GGUF on the PrismML llama.cpp fork (`:8089`, text + image)
 
 
