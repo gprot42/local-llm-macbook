@@ -3,14 +3,14 @@
   "model": "tensorfold-gemma4/gemma-4-26b-a4b-tensorfold",
   "agent": {
     "build": {
-      "temperature": 1.0,
-      "top_p": 0.95,
-      "top_k": 64
+      "temperature": 0.35,
+      "top_p": 0.9,
+      "top_k": 40
     },
     "plan": {
-      "temperature": 1.0,
-      "top_p": 0.95,
-      "top_k": 64
+      "temperature": 0.35,
+      "top_p": 0.9,
+      "top_k": 40
     }
   },
   "permission": {

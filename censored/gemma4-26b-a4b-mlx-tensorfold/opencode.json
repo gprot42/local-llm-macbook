@@ -17,7 +17,7 @@
           "name": "Gemma 4 26B-A4B base — TensorFold (DFlash, thinking off)",
           "reasoning": false,
           "tool_call": true,
-          "temperature": false,
+          "temperature": true,
           "limit": {
             "context": 49152,
             "output": 16384

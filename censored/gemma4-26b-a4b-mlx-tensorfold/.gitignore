@@ -1,3 +1,5 @@
 venv/
 .tensorfold_config
 __pycache__/
+.harness_failures/
+.tensorfold_supervisor.pid
