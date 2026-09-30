@@ -56,3 +56,11 @@ Cold prefill ~3,000 tok/s (a ~21.7k-token prompt in ~7 s); warm/short prompts TT
 
 - Single-run, indicative numbers; expect run-to-run variance (code ~165–190, prose ~140). Draft acceptance is higher on code than prose.
 - Weights are local; the *recipe* above is the source of truth (reproducible on another machine). The TensorFold fixes are pinned via the fork until #157 merges.
+
+## Narration & build prompt (2026-09-30)
+
+The abliterated weights are chatty on **open-ended / research** prompts — the model narrates ("let's do it", "let's go", "the first action is bash") before acting. On **concrete coding tasks** it already goes straight to tool calls (0 preamble), and temperature (1.0 / 0.6 / 0.3) doesn't change it — it's the ablated style, not a bug (the `<|channel>thought` leaks seen in older sessions are fixed, see above).
+
+**Mitigation:** tightened the OpenCode **build-agent prompt** to hard-suppress narration — a "No narration" paragraph that bans plan/preamble, tool-call announcements ("the first action is bash", "I'll now edit…", "let me…") and filler openers ("let's do it", "let's go", "sure", "great", "okay"); the only prose allowed is one final result line. Applied to the live `~/.config/opencode/opencode.json` and to the repo source `censored/ternary-bonsai-2-27b-tensorfold/opencode.json` (the generic build prompt the live config is installed from). Takes effect on **OpenCode restart** — it's a client-side prompt, so no TensorFold server restart is needed.
+
+**Caveat:** this reduces narration, it does not eliminate it on open-ended asks — the tendency is in the weights, not the prompt.
