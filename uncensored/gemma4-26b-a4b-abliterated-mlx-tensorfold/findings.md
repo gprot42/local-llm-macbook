@@ -73,3 +73,78 @@ Asking this pack to write a whole file (e.g. a single-file HTML game) can produc
 This is **not** the channel bug and **not** a lane bug. Evidence: on the *same* prompt the **censored base** pack (`:8102`) returns a clean, complete `write` call (`finish_reason=tool_calls`, 6096-char HTML arg, no repetition, no leak); the **abliterated** pack hit `length` with an unterminated, leaked call. So it's **abliteration-induced degeneration** on long generations. TensorFold exposes only temperature/top-p/top-k — **no repetition penalty** — so there is no engine knob to damp the loop.
 
 Mitigations (none free): (1) use the **base pack** or a stronger model for large single-file writes (best reliability; loses "uncensored"); (2) raise the per-request output cap so *legit* large files finish before truncation (does nothing for a true loop); (3) upstream: add a repetition penalty to TensorFold (real fix, larger change); (4) engine-cosmetic: hide an unterminated `<|tool_call>…` block at `finish` so it doesn't slop into chat (stops the wall of text, but the file still isn't written). Bottom line: the abliterated pack is chat-strong but degrades on long agentic file writes.
+
+## Repetition / frequency / presence penalty — TensorFold feature (2026-09-30)
+
+Mitigation (3) above, built as its own feature on a **separate branch and PR** (kept out of the
+#157 leak-fix branch on purpose). TensorFold previously exposed only temperature / top-p / top-k,
+so there was no way to damp the loop; this adds the standard penalties.
+
+**Branch:** `gprot42/TensorFold@feat-repetition-penalty` (cut from upstream `main`).
+
+**Changes, in the order made — follow these to reproduce the feature:**
+
+1. `src/tensorfold/engine/exact_sampling.py` — `Sampling` gains `repetition_penalty`,
+   `frequency_penalty`, `presence_penalty`, `penalty_last_n` (every one a no-op at its default)
+   plus a `has_penalty` flag. New `penalized()` applies the HF repetition rule (divide a positive
+   logit / multiply a negative one) and the OpenAI-style frequency/presence subtraction to the
+   candidate logits, *before* top-k/top-p/min-p/Gumbel, so a much-repeated token drops among the
+   candidates. `choose()`, `choose_rows()` and `sample_rows()` take an optional per-row `recent`
+   history (None = no penalty); the MLX nucleus fast path is skipped when a penalty is on.
+2. `src/tensorfold/server/request_options.py` — `parse_numbers` validates the four fields
+   (`repetition_penalty` > 0; frequency/presence may be negative like OpenAI; `penalty_last_n` an
+   integer), and `_resolve_sampling` puts them on the `Sampling`.
+3. `src/tensorfold/cli.py` — `--repetition-penalty`, `--frequency-penalty`, `--presence-penalty`,
+   `--penalty-last-n`, and reads the same keys from the model's `generation_config.json`.
+4. `src/tensorfold/server/http.py` — forward those four keys from the request body (the HTTP layer
+   whitelists body keys, so without this the fields were silently dropped — the bug that made an
+   early live test look like a no-op).
+5. **The effecting change — decode reroute (`feat` commit `412f613`):** a request that sets a
+   penalty runs its stream with **drafts off** (`LaneStream`'s built-in serial reference mode) and
+   draws through the extended **CPU exact path** with its reply-so-far history, so the penalty is
+   applied exactly per token. The Metal decode kernel keeps its batched fast path untouched whenever
+   no stream in the round has a penalty.
+   - `server/scheduler.py`: drafts off when `sampling.has_penalty`.
+   - `engine/lane_family.py`: `_draw()` routes a penalised draw to `exact_sampling.sample_rows`
+     with `recent=history`; new `_recent(stream, n)` helper.
+   - `engine/family_shared.py`: `_draw_streams` carries the stream and does a per-stream CPU draw
+     when any stream in the round is penalised.
+   - `engine/family_prefill.py`: pass each row's `recent` on the first / pipelined tokens.
+
+**Design note.** The penalty deliberately reroutes to CPU (drafts off) instead of modifying the
+hand-written Metal sampling kernel — correct and self-contained, at the cost of the speculative
+speedup *while a penalty is active*. Teaching the kernel (and the CUDA rank headers / `pack_sampling`)
+to carry per-row history for full-speed penalised drafting is a later step.
+
+**How to enable (client side).** Set `repetition_penalty` (try 1.2–1.5) in the request body, or in
+OpenCode's model `options`, or start the server with `--repetition-penalty`. It only applies when
+`temperature > 0` (a greedy request has no `Sampling`).
+
+**Tests.** `tests/test_repetition_penalty.py` covers the penalty math, the request validation and
+resolution, the selection flips, and the per-row history; the decode-loop / lane / stream suites and
+the full suite stay green.
+
+**Live build.** The abliterated venv (`:8104`) runs a *local combined build*: the `feat` branch plus
+the #157 channel/tool fixes overlaid, so the running server has both. Reproduce with
+`pip install --force-reinstall --no-deps <fork checkout>` from a tree that has both, then restart
+`./2_start_tensorfold.sh`. (The stack's `TF_VERSION` pin still points at the #157 branch; switch it
+once the two PRs merge upstream.)
+
+**Result (live A/B on the game prompt).** The penalty *engages* — verified two ways. Speed: with no
+penalty the draw runs the drafted fast path at ~180 tok/s; with a penalty it drops to ~123 tok/s,
+exactly the loss of speculative decoding as the stream falls back to the serial CPU path (so the
+reroute is confirmed active). Behaviour: no penalty → `finish=length`, 1600 tokens, the
+`</td></tr></tbody></table>` loop; `repetition_penalty=1.3` → the loop is gone (1.15 is too weak and
+still loops). **But it does not cleanly fix the large-file write.** On
+this abliterated model the penalty just moves the failure: the model either stops early with a
+half-written file, or degenerates into punctuation soup (`}|}{|}:{}…`) inside the content string, so
+the `write` call — even when it is terminated with `<tool_call|>` — has malformed arguments and still
+leaks as text (`tool_calls: []`). The reason is fundamental: repetition penalty punishes tokens that
+*legitimately* repeat in structured output (HTML tags, JSON braces / quotes / `<|"|>`), so it fights
+the loop and the file's own syntax at once. It is a good general anti-repetition knob for prose/chat;
+it is the wrong single tool for long agentic file writes.
+
+**So the game-slop verdict stands:** for reliable large single-file writes use the base pack or a
+stronger model. The repetition penalty is a useful, now-available knob (best on prose), and a fuller
+agentic fix would pair a gentler penalty with mitigation (4) above — repair or hide an unterminated /
+malformed `<|tool_call>` block at `finish` instead of leaking it.
