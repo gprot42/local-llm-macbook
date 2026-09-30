@@ -196,3 +196,8 @@ way). Caveat: the salvaged call only has the fields the model emitted before the
 but no `path` (the model wrote content first) — so it is a *clean, retryable* partial, not a
 guaranteed-valid write. That is the intended win: no wall of markup in the chat, a structured call
 instead. Pair it with a stronger model (or the base pack) when the write must actually succeed.
+
+After the scope extension, the terminated unbalanced-`<|"|>` case is live-verified too: the observed
+`<|tool_call>call:glob{pattern:<|"|>*/}<tool_call|>` (and a real agentic "find all Python files"
+request) come back as a structured `glob` call with **no markup in the content**. Full suite on the
+repair branch: 3468 passed, 440 skipped.
