@@ -148,3 +148,47 @@ it is the wrong single tool for long agentic file writes.
 stronger model. The repetition penalty is a useful, now-available knob (best on prose), and a fuller
 agentic fix would pair a gentler penalty with mitigation (4) above — repair or hide an unterminated /
 malformed `<|tool_call>` block at `finish` instead of leaking it.
+
+## Unterminated tool-call repair — mitigation (4) prototype (2026-09-30)
+
+The other half of the slop: even with the loop broken, a large `write` can run out of tokens after it
+opens `<|tool_call>call:write{…}` but before `<tool_call|>`. With no complete block to match, the raw
+markup falls through into the reply text (`tool_calls: []`, content full of `<|tool_call>…`). This
+prototype makes that fail cleanly instead.
+
+**Branch:** `gprot42/TensorFold@feat-toolcall-repair` (off upstream `main`). **No PR yet** — held until
+#157 is approved and after live testing.
+
+**Change (one file): `src/tensorfold/server/tools.py`.**
+
+- `_repair_gemma_call(fragment, known)` — best-effort `(name, arguments)` from an unterminated
+  `call:NAME{…}`: keeps the complete `key:value` pairs and salvages a truncated final string value to
+  the end of the reply.
+- `_repair_leaked_tool_calls(content, known)` — for each leaked `<|tool_call>` opener: a **terminated**
+  block (has `<tool_call|>`) is left exactly as normal parsing left it (a small terminated malformed
+  call staying as text is deliberate upstream behaviour); an **unterminated** block is repaired into a
+  structured call when it names an offered tool, hidden when it names an unoffered tool, and plain text
+  that merely mentions the marker is left untouched.
+- `parse_tool_calls_from_content` runs the repair on both the no-envelope early return and the normal
+  end — only on the lenient reply path (`max_calls is None`) and only when `<|tool_call>` is still in
+  the text.
+
+**Scope (deliberate).** Only *unterminated* blocks are repaired/hidden. A terminated-but-corrupted
+block (the penalty-induced case) is left as text, matching upstream behaviour — a fuller fix for that
+case is out of scope for this prototype.
+
+**Tests.** `tests/test_toolcall_repair.py` (repair, truncated-string salvage, hide an unoffered call,
+keep plain text, terminated-left-as-text, complete-call regression); existing tool-call suites green.
+
+**Live build.** Overlaid into the abliterated venv (`:8104`), which now runs channel fix + penalty +
+the #157 tool-call fix + this repair together (a *local* build; each of the three is a distinct branch,
+not one PR).
+
+**Result (live).** Forcing the cut-off (`max_tokens=300`) on the game prompt: without the repair this
+leaks `<|tool_call>call:write{content:<|"|><!DOCTYPE…` as raw text; with it the reply is a structured
+`write` call carrying the salvaged partial content (~946 chars of valid HTML) with **zero markup in the
+content**. At a normal token cap the same prompt completes as an ordinary `write` call (no leak either
+way). Caveat: the salvaged call only has the fields the model emitted before the cut — here `content`
+but no `path` (the model wrote content first) — so it is a *clean, retryable* partial, not a
+guaranteed-valid write. That is the intended win: no wall of markup in the chat, a structured call
+instead. Pair it with a stronger model (or the base pack) when the write must actually succeed.
