@@ -173,13 +173,15 @@ prototype makes that fail cleanly instead.
   end — only on the lenient reply path (`max_calls is None`) and only when `<|tool_call>` is still in
   the text.
 
-**Scope.** A block is treated as broken when it is *unterminated* (no `<tool_call|>`, cut off at the
-token limit) **or** has an *unbalanced* `<|"|>` string delimiter — an odd count, i.e. the model opened
-a string value and never closed it. That second case covers a live `glob` leak
-(`<|tool_call>call:glob{pattern:<|"|>*/}<tool_call|>` — terminated but the pattern string never closed)
-and the penalty-induced corrupted write. A terminated block with *balanced* delimiters that still fails
-to parse (e.g. a bare `{location}`) is left as text, matching upstream's deliberate behaviour; text
-after a terminated block is preserved.
+**Scope.** Every block reaching the repair already failed the strict parse (unterminated at the token
+limit; an unbalanced `<|"|>` string; or a value the model emitted as a bare degenerate token instead of
+a `<|"|>` string). The rule is by *salvageability*, not by a single syntactic signature: if the args
+can be salvaged for an offered tool (at least one field) the block becomes a structured call; an
+*unterminated* call that can't be salvaged is hidden (it was cut off, its text is useless); a
+*terminated* block that can't be salvaged (a bare `{location}` with no `key:value`) is left as text,
+matching upstream's deliberate behaviour; text after a terminated block is preserved. Live-observed
+shapes this covers: the truncated big write, the `glob{pattern:<|"|>*/}` unclosed string, and
+`write{content:<|"|>…<|"|>,filePath:mapsto_path_…_now}` (balanced delimiters, degenerate bare value).
 
 **Tests.** `tests/test_toolcall_repair.py` (repair, truncated-string salvage, hide an unoffered call,
 keep plain text, terminated-left-as-text, complete-call regression); existing tool-call suites green.
