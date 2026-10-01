@@ -443,6 +443,23 @@ THINKING_BUDGETS = {"minimal": 512, "low": 1024, "medium": 2048, "high": 4096, "
 THINKING_DEFAULT_BUDGET = int(os.environ.get("HARNESS_THINKING_BUDGET", "2048"))
 
 
+THINKING_SUFFIX = "-thinking"   # "<served model>-thinking": the thinking entry in OpenCode's model picker
+
+
+def apply_thinking_model(payload: dict[str, Any]) -> bool:
+    """A request for "<model>-thinking" is a request for <model> with thinking on (unless the request sets
+    thinking itself, e.g. an OpenCode variant's reasoning_effort). True when the name was rewritten."""
+
+    model = payload.get("model")
+    if not (isinstance(model, str) and model.endswith(THINKING_SUFFIX)):
+        return False
+    payload["model"] = model[: -len(THINKING_SUFFIX)]
+    kwargs = payload.get("chat_template_kwargs") if isinstance(payload.get("chat_template_kwargs"), dict) else {}
+    if payload.get("reasoning_effort") is None and "enable_thinking" not in kwargs and "reasoning_effort" not in kwargs:
+        payload["chat_template_kwargs"] = {**kwargs, "enable_thinking": True}
+    return True
+
+
 def thinking_requested(payload: dict[str, Any]) -> str | None:
     """The effort when the request turns thinking on (reasoning_effort, or chat_template_kwargs), else None."""
 
@@ -465,6 +482,7 @@ def prepare_request(payload: dict[str, Any], cfg: Config, *, agentic: bool | Non
 
     if agentic is None:
         agentic = bool(payload.get("tools"))
+    apply_thinking_model(payload)
     for key, value in cfg.defaults.items():
         if payload.get(key) is None:
             payload[key] = value
@@ -2181,6 +2199,13 @@ def _judge_retry_self_test() -> None:
         t = {"model": "m", "tools": [{}], "reasoning_effort": "low", "thinking_budget": 300, "messages": []}
         prepare_request(t, cfg)
         assert t["thinking_budget"] == 300 and t["max_tokens"] == 6444, "a client's own budget wins"
+        t = {"model": "gemma-x-thinking", "tools": [{}], "messages": []}
+        prepare_request(t, cfg)
+        assert t["model"] == "gemma-x" and t["chat_template_kwargs"] == {"enable_thinking": True}
+        assert t["thinking_budget"] == THINKING_DEFAULT_BUDGET and t["max_tokens"] == 6144 + THINKING_DEFAULT_BUDGET
+        t = {"model": "gemma-x-thinking", "tools": [{}], "reasoning_effort": "high", "messages": []}
+        prepare_request(t, cfg)
+        assert t["model"] == "gemma-x" and "chat_template_kwargs" not in t and t["thinking_budget"] == 4096, "a variant picks the budget"
         for off in ({"reasoning_effort": "none"}, {"chat_template_kwargs": {"enable_thinking": False}}, {}):
             t = {"model": "m", "tools": [{}], "messages": [], **off}
             prepare_request(t, cfg)

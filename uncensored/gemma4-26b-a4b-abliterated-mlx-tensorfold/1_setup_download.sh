@@ -102,6 +102,7 @@ python -m pip install --upgrade pip
 #   gemma4-thought-channel-v0.6.0     thought-channel leak fixes with thinking off
 #   feat-repetition-penalty-v0.6.0    repetition / frequency / presence penalties
 #   feat-toolcall-repair-v0.6.0       repair or hide an unterminated / malformed tool call
+#   prompt-cache-tool-turn-v0.6.0     prompt-cache checkpoint for agentic steps after a tool result
 # (0.6.0 itself parses the bare <|tool_call>:NAME form, so the old colon-prefix branch is gone.)
 # The combined branch is checked out in ./.tensorfold-src and installed from there; on a
 # machine without it, the fork branches are merged on top of TF_BASE as before.
@@ -119,7 +120,7 @@ if [[ -z "${TF_LOCAL_SRC}" && -d "${SCRIPT_DIR}/.tensorfold-src/.git" ]]; then
 fi
 TF_REPO="${TF_REPO:-gprot42/TensorFold}"
 TF_BASE="${TF_BASE:-gemma4-thought-channel-v0.6.0}"
-TF_BRANCHES="${TF_BRANCHES:-feat-repetition-penalty-v0.6.0 feat-toolcall-repair-v0.6.0}"
+TF_BRANCHES="${TF_BRANCHES:-feat-repetition-penalty-v0.6.0 feat-toolcall-repair-v0.6.0 prompt-cache-tool-turn-v0.6.0}"
 TF_VERSION="${TF_VERSION:-}"
 if [[ -n "${TF_LOCAL_SRC}" ]]; then
     echo "→ TensorFold: local checkout ${TF_LOCAL_SRC} ($(git -C "${TF_LOCAL_SRC}" log --oneline -1 2>/dev/null || echo 'not a git tree'))"

@@ -14,7 +14,25 @@
       },
       "models": {
         "gemma-4-26b-a4b-abliterated-tensorfold": {
-          "name": "Gemma 4 26B-A4B abliterated — TensorFold (DFlash; thinking: pick a variant)",
+          "name": "Gemma 4 26B-A4B abliterated — TensorFold (no thinking)",
+          "reasoning": false,
+          "tool_call": true,
+          "temperature": true,
+          "limit": {
+            "context": 49152,
+            "output": 16384
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "gemma-4-26b-a4b-abliterated-tensorfold-thinking": {
+          "name": "Gemma 4 26B-A4B abliterated — TensorFold (thinking)",
           "reasoning": true,
           "tool_call": true,
           "temperature": true,

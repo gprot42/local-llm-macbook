@@ -11,7 +11,7 @@ Face) — see *Reproduce* below. Censored sibling: [`../../censored/gemma4-26b-a
 |--|--|--|
 | Model | **local** `~/.cache/mlx-converts/gemma-4-26b-a4b-abliterated-4bit` | ~13 GB |
 | Drafter | `z-lab/gemma-4-26B-A4B-it-DFlash` | ~0.8 GB |
-| Engine | TensorFold **v0.6.0 + 3 patch branches** (thought-channel fix, repetition penalty, tool-call repair), branch `combined-v0.6.0` in `./.tensorfold-src`, installed by `1_setup_download.sh` | — |
+| Engine | TensorFold **v0.6.0 + 4 patch branches** (thought-channel fix, repetition penalty, tool-call repair, prompt-cache fix for agentic steps), branch `combined-v0.6.0` in `./.tensorfold-src`, installed by `1_setup_download.sh` | — |
 
 The pack was quantised from `SevenOfNine/Gemma-4-26B-A4B-It-Abliterated` (a
 Heretic-abliterated Gemma 4, bf16) and given the **base pack's standard Gemma
