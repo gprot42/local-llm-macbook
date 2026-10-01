@@ -14,8 +14,8 @@
       },
       "models": {
         "gemma-4-26b-a4b-abliterated-tensorfold": {
-          "name": "Gemma 4 26B-A4B abliterated — TensorFold (DFlash, thinking off)",
-          "reasoning": false,
+          "name": "Gemma 4 26B-A4B abliterated — TensorFold (DFlash; thinking: pick a variant)",
+          "reasoning": true,
           "tool_call": true,
           "temperature": true,
           "limit": {

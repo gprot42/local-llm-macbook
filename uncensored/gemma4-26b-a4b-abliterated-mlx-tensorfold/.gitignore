@@ -5,3 +5,4 @@ model/
 .harness_failures/
 .tensorfold-src/
 .tensorfold-rollback/
+.tensorfold_supervisor.pid

@@ -45,10 +45,27 @@ at it instead of the local path.
 
 ```bash
 ./1_setup_download.sh          # venv only; model is already local
-./2_start_tensorfold.sh        # engine :8104 + reliability proxy :8094, supervised
+./2_start_tensorfold.sh        # engine :8104 + reliability proxy :8094, supervised, detached
 python3 test_harness.py --gate # 8 quick checks (also run automatically after start)
 python3 test_e2e_opencode.py   # full OpenCode task through the stack, ~5-15 min
 ```
+
+The start command returns once the stack answers. The stack runs detached, in
+its own session with no terminal, so closing a terminal, an editor or the Claude
+app no longer stops it (on 2026-10-01 a closed terminal tab took the whole stack
+down with it). Manage it with `./2_start_tensorfold.sh status`, `logs` (follows
+`.tensorfold_stack.log`), `stop` and `restart`; `--foreground` runs it attached
+as before. `stop` and `restart` end the supervisor first, so it does not relaunch
+the engine, and only ever signal the processes *listening* on `:8094`/`:8104`
+(the old `lsof -ti :PORT` also matched connected clients such as OpenCode).
+
+**Thinking mode.** Off by default. The model entry in `opencode.json` declares
+`"reasoning": true`, so OpenCode offers the variants low, medium and high; picking
+one sends `reasoning_effort` and the engine thinks for that request. The proxy gives
+it a thinking budget of 1,024 / 2,048 / 4,096 tokens (`HARNESS_THINKING_BUDGET`
+for other requests) and raises that step's token cap by the same amount, so the
+answer or tool call still fits. Reasoning comes back separately and never in the
+answer. Expect a step to take roughly two to eight times longer.
 
 OpenCode: `./install-opencode-json.sh --force` merges the
 `gemma4-abliterated-tensorfold` provider and sets it default. The model entry

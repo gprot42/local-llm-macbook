@@ -436,6 +436,27 @@ def _completion(text: str, *, model: str, stream: bool) -> bytes:
 
 # ---- request hygiene -------------------------------------------------------------
 
+# Thinking budget per OpenCode variant (it sends reasoning_effort low / medium / high once the model
+# entry says "reasoning": true). The engine closes the thought block after this many tokens, and the
+# per-step cap grows by the same amount so the answer or tool call still fits after the thinking.
+THINKING_BUDGETS = {"minimal": 512, "low": 1024, "medium": 2048, "high": 4096, "xhigh": 6144, "max": 6144}
+THINKING_DEFAULT_BUDGET = int(os.environ.get("HARNESS_THINKING_BUDGET", "2048"))
+
+
+def thinking_requested(payload: dict[str, Any]) -> str | None:
+    """The effort when the request turns thinking on (reasoning_effort, or chat_template_kwargs), else None."""
+
+    effort = payload.get("reasoning_effort")
+    kwargs = payload.get("chat_template_kwargs") if isinstance(payload.get("chat_template_kwargs"), dict) else {}
+    if effort is None:
+        effort = kwargs.get("reasoning_effort")
+    if kwargs.get("enable_thinking") is False or effort == "none":
+        return None
+    if isinstance(effort, str):
+        return effort
+    return "default" if kwargs.get("enable_thinking") is True else None
+
+
 def prepare_request(payload: dict[str, Any], cfg: Config, *, agentic: bool | None = None) -> dict[str, Any]:
     """Sampling defaults for omitted fields, the per-step token cap for agentic
     requests, include_usage on streams. Returns a summary for the log.
@@ -447,19 +468,30 @@ def prepare_request(payload: dict[str, Any], cfg: Config, *, agentic: bool | Non
     for key, value in cfg.defaults.items():
         if payload.get(key) is None:
             payload[key] = value
+    effort = thinking_requested(payload)
+    budget = 0
+    if effort is not None:
+        if payload.get("thinking_budget") is None:
+            payload["thinking_budget"] = THINKING_BUDGETS.get(effort, THINKING_DEFAULT_BUDGET)
+        try:
+            budget = max(0, int(payload["thinking_budget"]))
+        except (TypeError, ValueError):
+            budget = THINKING_DEFAULT_BUDGET
     if agentic and cfg.step_max_tokens:
+        cap = cfg.step_max_tokens + budget
         asked = payload.get("max_tokens") or payload.get("max_completion_tokens")
         try:
             asked = int(asked) if asked is not None else None
         except (TypeError, ValueError):
             asked = None
-        payload["max_tokens"] = min(asked, cfg.step_max_tokens) if asked else cfg.step_max_tokens
+        payload["max_tokens"] = min(asked, cap) if asked else cap
         payload.pop("max_completion_tokens", None)
     if payload.get("stream"):
         options = payload.get("stream_options") if isinstance(payload.get("stream_options"), dict) else {}
         options.setdefault("include_usage", True)
         payload["stream_options"] = options
-    return {"agentic": agentic, "max_tokens": payload.get("max_tokens"), "temperature": payload.get("temperature")}
+    return {"agentic": agentic, "max_tokens": payload.get("max_tokens"), "temperature": payload.get("temperature"),
+            "thinking": effort}
 
 
 def turn_checks(payload: dict[str, Any], tool_calls: list[dict[str, Any]]) -> Verdict:
@@ -2139,6 +2171,20 @@ def _judge_retry_self_test() -> None:
         for other in ("z/other.js", "z/t.js", "z/t_v2.py", "z/utils.js"):
             assert sibling_copy(wrote_js, [{"function": {"name": "write", "arguments": json.dumps({"filePath": other, "content": "x"})}}]).ok, other
         assert sibling_copy([{"role": "user", "content": "go"}], [{"function": {"name": "write", "arguments": json.dumps({"filePath": "z/t_v2.js", "content": "x"})}}]).ok, "no original in this turn"
+        # 6o. thinking: a reasoning_effort gets a budget and a bigger step cap; none / absent change nothing
+        t = {"model": "m", "tools": [{}], "max_tokens": 16384, "reasoning_effort": "high", "messages": []}
+        prepare_request(t, cfg)
+        assert t["thinking_budget"] == 4096 and t["max_tokens"] == 6144 + 4096, t
+        t = {"model": "m", "tools": [{}], "chat_template_kwargs": {"enable_thinking": True}, "messages": []}
+        prepare_request(t, cfg)
+        assert t["thinking_budget"] == THINKING_DEFAULT_BUDGET and t["max_tokens"] == 6144 + THINKING_DEFAULT_BUDGET
+        t = {"model": "m", "tools": [{}], "reasoning_effort": "low", "thinking_budget": 300, "messages": []}
+        prepare_request(t, cfg)
+        assert t["thinking_budget"] == 300 and t["max_tokens"] == 6444, "a client's own budget wins"
+        for off in ({"reasoning_effort": "none"}, {"chat_template_kwargs": {"enable_thinking": False}}, {}):
+            t = {"model": "m", "tools": [{}], "messages": [], **off}
+            prepare_request(t, cfg)
+            assert "thinking_budget" not in t and t["max_tokens"] == 6144, off
         # 7. chat without temperature gets the defaults; chat max_tokens is not capped
         port, stop = _with_fake_engine([("text", "pong")], cfg)
         try:

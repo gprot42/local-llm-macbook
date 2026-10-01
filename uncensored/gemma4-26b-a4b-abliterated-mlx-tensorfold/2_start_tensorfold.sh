@@ -14,6 +14,13 @@
 # min-p 0.05 (Gemma's 1.0 / 0.95 / 64 degenerates on this abliterated pack in
 # long agentic runs). A request that sets its own values wins.
 #
+# Detached (default): the stack runs in its own session with no terminal, so
+# closing a terminal, an editor or the Claude app does not take it down (that
+# is how it died on 2026-10-01: the tab it ran in was closed, and the hangup
+# killed the supervisor, the engine and the proxy together). The command returns
+# once the stack answers; output goes to .tensorfold_stack.log
+# (./2_start_tensorfold.sh logs). --foreground keeps the old attached behaviour.
+#
 # Supervision (default on): after start, the engine is probed every 20 s and
 # restarted if the process exits or fails three probes in a row; the proxy is
 # restarted if it dies. Clients see a pause, not an error: the proxy waits out
@@ -30,11 +37,13 @@
 #   --no-thinking     Skip the think block (default)
 #   --no-drafts       One token per round
 #   --no-supervise    Exit when the engine exits (no auto-restart)
+#   --foreground      Run attached to this terminal (Ctrl-C stops; closing it stops)
 #   --harness-gate    Run test_harness.py --gate after ready (default)
 #   --no-harness-gate Skip the post-start gate
-#   restart           Free the port, then start
-#   stop              Stop whatever is bound to the port
-#   status            Show whether /v1/models and /harness/health answer
+#   restart           Stop the supervisor and the servers, then start
+#   stop              Stop the supervisor, then whatever listens on the two ports
+#   status            Show the supervisor, /v1/models and /harness/health
+#   logs              Follow .tensorfold_stack.log
 #   --help, -h        Show this help
 #
 # Proxy knobs are environment variables read by loop_proxy.py:
@@ -59,6 +68,12 @@ DO_STOP=false
 DO_STATUS=false
 HARNESS_GATE=true
 SUPERVISE=true
+FOREGROUND=false
+DO_LOGS=false
+FORWARD=()                                              # arguments the detached run is started with
+PID_FILE="${SCRIPT_DIR}/.tensorfold_supervisor.pid"     # the supervising script, so stop/restart can end it
+STACK_LOG="${SCRIPT_DIR}/.tensorfold_stack.log"         # a detached run's output
+STACK_LOG_MAX_BYTES=$((50 * 1024 * 1024))
 
 # Sampling defaults: engine CLI and the proxy's fill-ins for omitted fields agree.
 SAMPLING_TEMPERATURE="${SAMPLING_TEMPERATURE:-0.45}"
@@ -74,10 +89,46 @@ SUPERVISE_MAX_RESTARTS="${SUPERVISE_MAX_RESTARTS:-20}"
 
 log() { echo "$(date '+%H:%M:%S') $*"; }
 
+# The process LISTENING on a port. `lsof -ti :PORT` also lists every client
+# connected to it, which made stop/restart send SIGTERM to a connected OpenCode.
+listen_pids() {
+    lsof -nP -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null || true
+}
+
+# A supervised start relaunches the engine when it dies, so stop/restart end the
+# supervising script first (its trap shuts the engine and proxy down), then clear
+# the ports. Only this stack's script is touched: the pidfile is per directory and
+# the process is checked to be a 2_start_tensorfold.sh.
+stop_supervisor() {
+    local pid i
+    [[ -f "${PID_FILE}" ]] || return 0
+    pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+    if [[ -n "${pid}" && "${pid}" != "$$" ]] && kill -0 "${pid}" 2>/dev/null \
+        && ps -p "${pid}" -o command= 2>/dev/null | grep -q 2_start_tensorfold; then
+        echo "→ Stopping supervisor (pid ${pid}) ..."
+        kill -TERM "${pid}" 2>/dev/null || true
+        for i in $(seq 1 15); do
+            kill -0 "${pid}" 2>/dev/null || break
+            sleep 1
+        done
+        kill -KILL "${pid}" 2>/dev/null || true
+    fi
+    rm -f "${PID_FILE}"
+}
+
+supervisor_pid() {
+    local pid
+    pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null \
+        && ps -p "${pid}" -o command= 2>/dev/null | grep -q 2_start_tensorfold; then
+        echo "${pid}"
+    fi
+}
+
 stop_server_on_port() {
     local port="$1"
     local pids
-    pids="$(lsof -ti ":${port}" 2>/dev/null || true)"
+    pids="$(listen_pids "${port}")"
     if [[ -z "${pids}" ]]; then
         return 0
     fi
@@ -85,7 +136,7 @@ stop_server_on_port() {
     # shellcheck disable=SC2086
     kill -TERM ${pids} 2>/dev/null || true
     sleep 2
-    pids="$(lsof -ti ":${port}" 2>/dev/null || true)"
+    pids="$(listen_pids "${port}")"
     if [[ -n "${pids}" ]]; then
         echo "→ Force-stopping stubborn process(es) ..."
         # shellcheck disable=SC2086
@@ -95,7 +146,7 @@ stop_server_on_port() {
 }
 
 port_pids() {
-    lsof -ti ":${PORT}" 2>/dev/null || true
+    listen_pids "${PORT}"
 }
 
 describe_port_holder() {
@@ -129,35 +180,42 @@ i=0
 while [[ ${i} -lt ${#args[@]} ]]; do
     case "${args[$i]}" in
         --help|-h)
-            sed -n '3,44p' "$0" | sed 's/^# \?//'
+            sed -n '3,54p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
         restart) DO_RESTART=true; i=$((i + 1)) ;;
         stop) DO_STOP=true; i=$((i + 1)) ;;
         status) DO_STATUS=true; i=$((i + 1)) ;;
+        logs) DO_LOGS=true; i=$((i + 1)) ;;
+        --foreground) FOREGROUND=true; i=$((i + 1)) ;;
+        --detach) FOREGROUND=false; i=$((i + 1)) ;;
         --port)
             PORT="${args[$((i + 1))]:?--port needs a value}"
+            FORWARD+=(--port "${PORT}")
             i=$((i + 2))
             ;;
         --context)
             CLI_CONTEXT="${args[$((i + 1))]:?--context needs a value}"
+            FORWARD+=(--context "${CLI_CONTEXT}")
             i=$((i + 2))
             ;;
         --model)
             MODEL_OVERRIDE="${args[$((i + 1))]:?--model needs a value}"
+            FORWARD+=(--model "${MODEL_OVERRIDE}")
             i=$((i + 2))
             ;;
         --temperature)
             SAMPLING_TEMPERATURE="${args[$((i + 1))]:?--temperature needs a value}"
+            FORWARD+=(--temperature "${SAMPLING_TEMPERATURE}")
             i=$((i + 2))
             ;;
-        --thinking) THINKING=true; i=$((i + 1)) ;;
-        --no-thinking) THINKING=false; i=$((i + 1)) ;;
-        --no-drafts) NO_DRAFTS=true; i=$((i + 1)) ;;
-        --no-supervise) SUPERVISE=false; i=$((i + 1)) ;;
-        --supervise) SUPERVISE=true; i=$((i + 1)) ;;
-        --harness-gate) HARNESS_GATE=true; i=$((i + 1)) ;;
-        --no-harness-gate) HARNESS_GATE=false; i=$((i + 1)) ;;
+        --thinking) THINKING=true; FORWARD+=(--thinking); i=$((i + 1)) ;;
+        --no-thinking) THINKING=false; FORWARD+=(--no-thinking); i=$((i + 1)) ;;
+        --no-drafts) NO_DRAFTS=true; FORWARD+=(--no-drafts); i=$((i + 1)) ;;
+        --no-supervise) SUPERVISE=false; FORWARD+=(--no-supervise); i=$((i + 1)) ;;
+        --supervise) SUPERVISE=true; FORWARD+=(--supervise); i=$((i + 1)) ;;
+        --harness-gate) HARNESS_GATE=true; FORWARD+=(--harness-gate); i=$((i + 1)) ;;
+        --no-harness-gate) HARNESS_GATE=false; FORWARD+=(--no-harness-gate); i=$((i + 1)) ;;
         *)
             echo "ERROR: unknown argument: ${args[$i]}"
             exit 2
@@ -168,8 +226,15 @@ done
 # Engine stays 10 ports above the public proxy so --port keeps the pair together.
 ENGINE_PORT=$((PORT + 10))
 
+if [[ "${DO_LOGS}" == true ]]; then
+    [[ -f "${STACK_LOG}" ]] || { echo "No log yet: ${STACK_LOG}"; exit 1; }
+    exec tail -n 100 -f "${STACK_LOG}"
+fi
+
 if [[ "${DO_STATUS}" == true ]]; then
     echo "=== TensorFold status (port ${PORT}) ==="
+    sup="$(supervisor_pid)"
+    echo "→ Supervisor: ${sup:-none running}${sup:+  (log: ${STACK_LOG})}"
     pids="$(port_pids)"
     if [[ -z "${pids}" ]]; then
         echo "→ Port ${PORT}: free (no server)"
@@ -195,6 +260,7 @@ if [[ "${DO_STATUS}" == true ]]; then
 fi
 
 if [[ "${DO_STOP}" == true ]]; then
+    stop_supervisor
     stop_server_on_port "${PORT}"
     stop_server_on_port "${ENGINE_PORT}"
     echo "→ Stopped (ports ${PORT} and ${ENGINE_PORT})"
@@ -225,7 +291,8 @@ fi
 source "${VENV_DIR}/bin/activate"
 
 if [[ "${DO_RESTART}" == true ]]; then
-    echo "→ restart: clearing ports ${PORT} and ${ENGINE_PORT} ..."
+    echo "→ restart: stopping the supervisor and clearing ports ${PORT} and ${ENGINE_PORT} ..."
+    stop_supervisor
     stop_server_on_port "${PORT}"
     stop_server_on_port "${ENGINE_PORT}"
 elif [[ -n "$(port_pids)" ]]; then
@@ -249,6 +316,86 @@ elif [[ -n "$(port_pids)" ]]; then
     echo ""
     echo "  Free it with: ./2_start_tensorfold.sh restart"
     exit 1
+fi
+
+# ── Detached start ───────────────────────────────────────────────────────────────
+# Re-run this script with --foreground in a new session (setsid: no controlling
+# terminal, so no hangup reaches it), output appended to the stack log. Return once
+# the stack answers, reporting the post-start gate.
+DETACH_LAUNCHER='import os, sys
+log, pid_file, argv = sys.argv[1], sys.argv[2], sys.argv[3:]
+if os.fork():
+    os._exit(0)
+os.setsid()                                   # a new session: no controlling terminal, no hangup
+with open(pid_file, "w") as handle:           # the same pid the supervising bash keeps after exec
+    handle.write(f"{os.getpid()}\n")
+out = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+null = os.open(os.devnull, os.O_RDONLY)
+os.dup2(null, 0)
+os.dup2(out, 1)
+os.dup2(out, 2)
+os.execvp(argv[0], argv)'
+
+start_detached() {
+    local size start_bytes i pid="" ready=false gate=""
+    if [[ -f "${STACK_LOG}" ]]; then
+        size="$(wc -c < "${STACK_LOG}" | tr -d ' ')"
+        if [[ "${size}" -gt "${STACK_LOG_MAX_BYTES}" ]]; then
+            mv -f "${STACK_LOG}" "${STACK_LOG}.1"
+        fi
+    fi
+    { echo ""; echo "===== $(date '+%Y-%m-%d %H:%M:%S') detached start ====="; } >> "${STACK_LOG}"
+    start_bytes="$(wc -c < "${STACK_LOG}" | tr -d ' ')"
+    rm -f "${PID_FILE}"
+    python3 -c "${DETACH_LAUNCHER}" "${STACK_LOG}" "${PID_FILE}" \
+        bash "${SCRIPT_DIR}/2_start_tensorfold.sh" --foreground ${FORWARD[@]+"${FORWARD[@]}"}
+    echo "→ Starting detached (log: ${STACK_LOG}) ..."
+    for i in $(seq 1 700); do
+        sleep 1
+        [[ -z "${pid}" && -f "${PID_FILE}" ]] && pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+        if curl -sf --max-time 2 "http://127.0.0.1:${PORT}/harness/health" >/dev/null 2>&1; then
+            ready=true
+            break
+        fi
+        if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+            break
+        fi
+        if [[ -z "${pid}" && "${i}" -ge 15 ]]; then
+            break
+        fi
+        if (( i % 15 == 0 )); then
+            echo "  ... ${i}s: $(tail -c +"$((start_bytes + 1))" "${STACK_LOG}" | grep -E '^→ ' | tail -1)"
+        fi
+    done
+    if [[ "${ready}" != true ]]; then
+        echo "ERROR: the stack did not come up. Last lines of ${STACK_LOG}:"
+        tail -c +"$((start_bytes + 1))" "${STACK_LOG}" | tail -25 | sed 's/^/  /'
+        exit 1
+    fi
+    if [[ "${HARNESS_GATE}" == true ]]; then
+        for i in $(seq 1 120); do
+            gate="$(tail -c +"$((start_bytes + 1))" "${STACK_LOG}" | grep -m1 -E 'Harness gate: (PASS|FAIL)' || true)"
+            [[ -n "${gate}" ]] && break
+            sleep 1
+        done
+    fi
+    echo ""
+    echo "============================================================"
+    echo "  READY — detached, supervisor pid ${pid}"
+    echo "============================================================"
+    echo "  API:      http://127.0.0.1:${PORT}/v1"
+    echo "  Health:   http://127.0.0.1:${PORT}/harness/health"
+    if [[ -n "${gate}" ]]; then
+        echo "  Gate:     ${gate#*Harness gate: }"
+    fi
+    echo "  Log:      ${STACK_LOG}   (./2_start_tensorfold.sh logs)"
+    echo "  Stop:     ./2_start_tensorfold.sh stop"
+    echo "============================================================"
+    exit 0
+}
+
+if [[ "${FOREGROUND}" != true ]]; then
+    start_detached
 fi
 
 weights_cached() {
@@ -308,9 +455,11 @@ cleanup() {
     [[ -n "${TF_PID}" ]] && kill -KILL "${TF_PID}" 2>/dev/null || true
     stop_server_on_port "${PORT}" >/dev/null 2>&1 || true
     stop_server_on_port "${ENGINE_PORT}" >/dev/null 2>&1 || true
+    rm -f "${PID_FILE}"
     exit 0
 }
 trap cleanup INT TERM HUP
+echo $$ > "${PID_FILE}"
 
 echo "=== Gemma 4 26B-A4B (abliterated, uncensored) — TensorFold ==="
 echo "→ Model:    ${HF_MODEL}"
@@ -467,7 +616,8 @@ fi
 misses=0
 restarts=0
 while true; do
-    sleep "${SUPERVISE_INTERVAL}"
+    sleep "${SUPERVISE_INTERVAL}" &
+    wait $! || true          # a plain sleep would delay the TERM trap by up to SUPERVISE_INTERVAL
     if [[ "${SHUTTING_DOWN}" == true ]]; then
         break
     fi
