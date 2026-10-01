@@ -285,6 +285,29 @@ def run_gate_tests(base: str, model: str, report: Report) -> bool:
         report.check("gate: GET /v1/models", False, str(e))
         return False
 
+    # The reliability proxy (loop_proxy.py) must be the thing answering on this
+    # port: it judges and retries agentic steps and injects sane sampling. A
+    # bare engine answers /v1/models too, so check its health endpoint.
+    try:
+        code, data, elapsed = _http_json(base, "GET", "/harness/health", timeout=10)
+        health = data if isinstance(data, dict) else {}
+        cfg = health.get("config") or {}
+        defaults = cfg.get("defaults") or {}
+        report.check(
+            "gate: harness proxy health",
+            code == 200 and health.get("upstream_ok") is True,
+            f"status={code} upstream_ok={health.get('upstream_ok')} counts={health.get('counts')} {elapsed:.2f}s"
+            + ("" if code != 404 else " — :%s is not the loop proxy (old proxy or bare engine)" % base.rsplit(":", 1)[-1]),
+        )
+        report.check(
+            "gate: harness sampling defaults",
+            isinstance(defaults.get("temperature"), (int, float)) and float(defaults["temperature"]) < 1.0
+            and int(cfg.get("step_max_tokens") or 0) > 0 and int(cfg.get("max_attempts") or 0) >= 2,
+            f"defaults={defaults} step_max_tokens={cfg.get('step_max_tokens')} attempts={cfg.get('max_attempts')}",
+        )
+    except Exception as e:
+        report.check("gate: harness proxy health", False, str(e))
+
     try:
         code, data, elapsed = _chat(
             base,

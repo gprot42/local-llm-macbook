@@ -2,3 +2,6 @@ venv/
 .tensorfold_config
 __pycache__/
 model/
+.harness_failures/
+.tensorfold-src/
+.tensorfold-rollback/

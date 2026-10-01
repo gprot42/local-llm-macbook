@@ -97,14 +97,58 @@ fi
 # shellcheck source=/dev/null
 source "${VENV_DIR}/bin/activate"
 python -m pip install --upgrade pip
-# Pinned to the release that ships the gemma4 MoE lane. Bump only after
-# re-checking that gemma-4-26B-A4B loads and drafted replies stay byte-exact
-# against "draft": false.
-TF_VERSION="${TF_VERSION:-fix-gemma-tool-call-colon-prefix}"
-# Fork branch carries the gemma4 tool-call fix (upstream PR ashhart/TensorFold#157).
-# Revert TF_REPO to ashhart/TensorFold and TF_VERSION to a release once the PR is merged+released.
+# TensorFold: upstream v0.6.0 plus three fork branches that are not upstream yet
+# (see findings.md, "Rebase onto v0.6.0", and tensorfold-pr-drafts.md):
+#   gemma4-thought-channel-v0.6.0     thought-channel leak fixes with thinking off
+#   feat-repetition-penalty-v0.6.0    repetition / frequency / presence penalties
+#   feat-toolcall-repair-v0.6.0       repair or hide an unterminated / malformed tool call
+# (0.6.0 itself parses the bare <|tool_call>:NAME form, so the old colon-prefix branch is gone.)
+# The combined branch is checked out in ./.tensorfold-src and installed from there; on a
+# machine without it, the fork branches are merged on top of TF_BASE as before.
+#   TF_REPO=owner/repo      fork to clone (default gprot42/TensorFold)
+#   TF_BASE=branch          branch to start from (default gemma4-thought-channel-v0.6.0)
+#   TF_BRANCHES="a b"       branches merged on top (default the two feat-*-v0.6.0 branches)
+#   TF_VERSION=ref          set to a tag/branch/commit to skip the merge and install that ref
+#                           straight from TF_REPO (e.g. TF_REPO=ashhart/TensorFold TF_VERSION=v0.6.0)
+#   TF_LOCAL_SRC=dir        install from a local TensorFold checkout instead; wins over everything
+#                           above. Default: ./.tensorfold-src when it is a git checkout (the rebased
+#                           v0.6.0 combined branch lives there; see tensorfold-pr-drafts.md).
+TF_LOCAL_SRC="${TF_LOCAL_SRC:-}"
+if [[ -z "${TF_LOCAL_SRC}" && -d "${SCRIPT_DIR}/.tensorfold-src/.git" ]]; then
+    TF_LOCAL_SRC="${SCRIPT_DIR}/.tensorfold-src"
+fi
 TF_REPO="${TF_REPO:-gprot42/TensorFold}"
-python -m pip install --upgrade "git+https://github.com/${TF_REPO}.git@${TF_VERSION}"
+TF_BASE="${TF_BASE:-gemma4-thought-channel-v0.6.0}"
+TF_BRANCHES="${TF_BRANCHES:-feat-repetition-penalty-v0.6.0 feat-toolcall-repair-v0.6.0}"
+TF_VERSION="${TF_VERSION:-}"
+if [[ -n "${TF_LOCAL_SRC}" ]]; then
+    echo "→ TensorFold: local checkout ${TF_LOCAL_SRC} ($(git -C "${TF_LOCAL_SRC}" log --oneline -1 2>/dev/null || echo 'not a git tree'))"
+    python -m pip install --upgrade "${TF_LOCAL_SRC}"
+elif [[ -n "${TF_VERSION}" ]]; then
+    echo "→ TensorFold: ${TF_REPO}@${TF_VERSION} (single ref, no fork merge)"
+    python -m pip install --upgrade "git+https://github.com/${TF_REPO}.git@${TF_VERSION}"
+else
+    TF_SRC="${SCRIPT_DIR}/.tensorfold-src"
+    echo "→ TensorFold: ${TF_REPO} ${TF_BASE} + ${TF_BRANCHES} → ${TF_SRC}"
+    rm -rf "${TF_SRC}"
+    git clone -q --filter=blob:none "https://github.com/${TF_REPO}.git" "${TF_SRC}"
+    for branch in ${TF_BASE} ${TF_BRANCHES}; do
+        if ! git -C "${TF_SRC}" rev-parse -q --verify "origin/${branch}" >/dev/null; then
+            echo "ERROR: branch ${branch} is not on ${TF_REPO}. The v0.6.0 branches are pushed from a machine"
+            echo "       that has them in .tensorfold-src (see tensorfold-pr-drafts.md), or set TF_LOCAL_SRC."
+            exit 1
+        fi
+    done
+    git -C "${TF_SRC}" checkout -q -b combined "origin/${TF_BASE}"
+    for branch in ${TF_BRANCHES}; do
+        if ! git -C "${TF_SRC}" -c user.name=setup -c user.email=setup@local merge -q --no-edit "origin/${branch}"; then
+            echo "ERROR: merging ${branch} onto ${TF_BASE} conflicts; resolve in ${TF_SRC} or set TF_VERSION to a single ref."
+            exit 1
+        fi
+    done
+    echo "→ Combined tree: $(git -C "${TF_SRC}" log --oneline -1)"
+    python -m pip install --upgrade "${TF_SRC}"
+fi
 
 echo "→ $(tensorfold --version)"
 echo ""

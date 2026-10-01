@@ -3,27 +3,44 @@
 # 2_start_tensorfold.sh — TensorFold OpenAI server for Gemma 4 26B-A4B (abliterated, uncensored)
 #
 # Listens at http://127.0.0.1:8094/v1
-# The engine itself is on :8104. loop_proxy.py owns :8094 and refuses a tool
-# call that has already returned the same result twice.
-# Gemma 4 runs on TensorFold's gemma4 lane (MoE-only kernels): this is the
-# base (censored) MoE pack. Do not use :8080 (Gemma/Diffusion stacks).
+# The engine itself is on :8104. loop_proxy.py owns :8094: it refuses repeated
+# tool calls, judges every agentic step (loops, symbol soup, narration instead
+# of tool calls, leaked envelopes, truncation, bad arguments), cancels a failing
+# generation at the engine and retries the step with fresh sampling, and fills
+# in sane sampling for clients that omit it. GET /harness/health has counters.
+# Gemma 4 runs on TensorFold's gemma4 lane (MoE-only kernels). Do not use :8080.
+#
+# Sampling: the engine defaults to temperature 0.45 / top-p 0.9 / top-k 40 /
+# min-p 0.05 (Gemma's 1.0 / 0.95 / 64 degenerates on this abliterated pack in
+# long agentic runs). A request that sets its own values wins.
+#
+# Supervision (default on): after start, the engine is probed every 20 s and
+# restarted if the process exits or fails three probes in a row; the proxy is
+# restarted if it dies. Clients see a pause, not an error: the proxy waits out
+# an engine restart for up to 90 s.
 #
 # Thinking is off by default, so tool calls are not wrapped in a think block.
-# Pass --thinking to turn it on.
 #
 # Options:
 #   --port PORT       Listen port (default 8094; engine is this + 10)
 #   --context N       Prompt + reply cap (default 131072; 0 = model max)
-#   --model REPO      Hugging Face repo (default from .tensorfold_config)
+#   --model REPO      Hugging Face repo / local dir (default from .tensorfold_config)
+#   --temperature T   Engine default temperature (default 0.45)
 #   --thinking        Open the think block
 #   --no-thinking     Skip the think block (default)
 #   --no-drafts       One token per round
+#   --no-supervise    Exit when the engine exits (no auto-restart)
 #   --harness-gate    Run test_harness.py --gate after ready (default)
 #   --no-harness-gate Skip the post-start gate
 #   restart           Free the port, then start
 #   stop              Stop whatever is bound to the port
-#   status            Show whether /v1/models answers
+#   status            Show whether /v1/models and /harness/health answer
 #   --help, -h        Show this help
+#
+# Proxy knobs are environment variables read by loop_proxy.py:
+#   HARNESS_STEP_MAX_TOKENS=6144  HARNESS_MAX_ATTEMPTS=3  HARNESS_STALL_SECONDS=240
+#   HARNESS_STREAM_PROSE=1 (stream agentic prose live; failures are cut, not retried)
+#   LOOP_MAX_ROUNDS=200
 # =============================================================================
 set -euo pipefail
 
@@ -41,6 +58,21 @@ DO_RESTART=false
 DO_STOP=false
 DO_STATUS=false
 HARNESS_GATE=true
+SUPERVISE=true
+
+# Sampling defaults: engine CLI and the proxy's fill-ins for omitted fields agree.
+SAMPLING_TEMPERATURE="${SAMPLING_TEMPERATURE:-0.45}"
+SAMPLING_TOP_P="${SAMPLING_TOP_P:-0.9}"
+SAMPLING_TOP_K="${SAMPLING_TOP_K:-40}"
+SAMPLING_MIN_P="${SAMPLING_MIN_P:-0.05}"
+ENGINE_MAX_TOKENS="${ENGINE_MAX_TOKENS:-8192}"   # engine cap when a request sets none (OpenCode sets its own)
+
+SUPERVISE_INTERVAL="${SUPERVISE_INTERVAL:-20}"   # seconds between health probes
+SUPERVISE_PROBE_TIMEOUT="${SUPERVISE_PROBE_TIMEOUT:-10}"
+SUPERVISE_FAILS="${SUPERVISE_FAILS:-3}"           # consecutive failed probes before a restart
+SUPERVISE_MAX_RESTARTS="${SUPERVISE_MAX_RESTARTS:-20}"
+
+log() { echo "$(date '+%H:%M:%S') $*"; }
 
 stop_server_on_port() {
     local port="$1"
@@ -81,6 +113,10 @@ server_healthy() {
     curl -sf --max-time 2 "http://127.0.0.1:${PORT}/v1/models" >/dev/null 2>&1
 }
 
+engine_healthy() {
+    curl -sf --max-time "${1:-2}" "http://127.0.0.1:${ENGINE_PORT}/v1/models" >/dev/null 2>&1
+}
+
 live_model_id() {
     curl -sf --max-time 2 "http://127.0.0.1:${PORT}/v1/models" 2>/dev/null \
         | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data'][0]['id'])" 2>/dev/null \
@@ -93,7 +129,7 @@ i=0
 while [[ ${i} -lt ${#args[@]} ]]; do
     case "${args[$i]}" in
         --help|-h)
-            sed -n '3,24p' "$0" | sed 's/^# \?//'
+            sed -n '3,44p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
         restart) DO_RESTART=true; i=$((i + 1)) ;;
@@ -111,9 +147,15 @@ while [[ ${i} -lt ${#args[@]} ]]; do
             MODEL_OVERRIDE="${args[$((i + 1))]:?--model needs a value}"
             i=$((i + 2))
             ;;
+        --temperature)
+            SAMPLING_TEMPERATURE="${args[$((i + 1))]:?--temperature needs a value}"
+            i=$((i + 2))
+            ;;
         --thinking) THINKING=true; i=$((i + 1)) ;;
         --no-thinking) THINKING=false; i=$((i + 1)) ;;
         --no-drafts) NO_DRAFTS=true; i=$((i + 1)) ;;
+        --no-supervise) SUPERVISE=false; i=$((i + 1)) ;;
+        --supervise) SUPERVISE=true; i=$((i + 1)) ;;
         --harness-gate) HARNESS_GATE=true; i=$((i + 1)) ;;
         --no-harness-gate) HARNESS_GATE=false; i=$((i + 1)) ;;
         *)
@@ -139,6 +181,12 @@ if [[ "${DO_STATUS}" == true ]]; then
         echo "→ Health:   OK  http://127.0.0.1:${PORT}/v1/models"
         echo "→ Model ID: $(live_model_id)"
         echo "→ API:      http://127.0.0.1:${PORT}/v1"
+        if curl -sf --max-time 3 "http://127.0.0.1:${PORT}/harness/health" >/dev/null 2>&1; then
+            echo "→ Harness:  $(curl -sf --max-time 3 "http://127.0.0.1:${PORT}/harness/health" \
+                | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if d.get('ok') else 'UPSTREAM DOWN', d.get('counts'), 'failures', d.get('failures'))" 2>/dev/null)"
+        else
+            echo "→ Harness:  /harness/health not answering — :${PORT} is not loop_proxy.py (restart to fix)"
+        fi
         exit 0
     fi
     echo "→ Health:   FAIL — something is bound but /v1/models failed"
@@ -235,11 +283,22 @@ echo "→ Checking weights ..."
 ensure_weights "${HF_MODEL}" "${DRAFTER:-}"
 echo ""
 
+echo "→ Proxy self-test ..."
+if ! python3 "${SCRIPT_DIR}/loop_proxy.py" --self-test >/dev/null 2>&1; then
+    echo "ERROR: loop_proxy.py --self-test failed. Run it directly to see why:"
+    echo "  python3 ${SCRIPT_DIR}/loop_proxy.py --self-test"
+    exit 1
+fi
+echo "→ Proxy self-test: ok"
+echo ""
+
 export MLX_USE_DEFAULT_DEVICE=gpu
 
 TF_PID=""
 PROXY_PID=""
+SHUTTING_DOWN=false
 cleanup() {
+    SHUTTING_DOWN=true
     echo ""
     echo "→ Shutting down TensorFold ..."
     [[ -n "${PROXY_PID}" ]] && kill -TERM "${PROXY_PID}" 2>/dev/null || true
@@ -258,8 +317,10 @@ echo "→ Model:    ${HF_MODEL}"
 echo "→ Drafter:  ${DRAFTER:-none}"
 echo "→ Alias:    ${MODEL_ALIAS}"
 echo "→ Context:  ${CONTEXT}"
+echo "→ Sampling: temperature ${SAMPLING_TEMPERATURE}, top-p ${SAMPLING_TOP_P}, top-k ${SAMPLING_TOP_K}, min-p ${SAMPLING_MIN_P}"
 echo "→ Thinking: $([[ "${THINKING}" == true ]] && echo on || echo off)"
 echo "→ Drafts:   $([[ "${NO_DRAFTS}" == true ]] && echo off || echo on)"
+echo "→ Supervise: $([[ "${SUPERVISE}" == true ]] && echo "on (probe every ${SUPERVISE_INTERVAL}s, restart after ${SUPERVISE_FAILS} misses)" || echo off)"
 echo "→ Port:     ${PORT}"
 echo "→ API:      http://127.0.0.1:${PORT}/v1"
 echo ""
@@ -270,9 +331,14 @@ SERVE_CMD=(
     --port "${ENGINE_PORT}"
     --name "${MODEL_ALIAS}"
     --context "${CONTEXT}"
-    --temperature 1.0
-    --top-p 0.95
-    --top-k 64
+    --max-tokens "${ENGINE_MAX_TOKENS}"
+    --temperature "${SAMPLING_TEMPERATURE}"
+    --top-p "${SAMPLING_TOP_P}"
+    --top-k "${SAMPLING_TOP_K}"
+    --min-p "${SAMPLING_MIN_P}"
+    # The engine is a patched build (1_setup_download.sh). 0.6.0 asks GitHub for a newer release at
+    # start and suggests `tensorfold update`, which would install the stock release over the patches.
+    --no-update-check
 )
 if [[ "${THINKING}" == true ]]; then
     SERVE_CMD+=(--thinking)
@@ -285,49 +351,89 @@ else
     SERVE_CMD+=(--drafter "${DRAFTER}")
 fi
 
-echo "→ Starting: ${SERVE_CMD[*]}"
-echo ""
-"${SERVE_CMD[@]}" &
-TF_PID=$!
+PROXY_CMD=(
+    python3 "${SCRIPT_DIR}/loop_proxy.py"
+    --listen "${PORT}"
+    --upstream "127.0.0.1:${ENGINE_PORT}"
+    --defaults "temperature=${SAMPLING_TEMPERATURE},top_p=${SAMPLING_TOP_P},top_k=${SAMPLING_TOP_K},min_p=${SAMPLING_MIN_P}"
+    --failures-dir "${SCRIPT_DIR}/.harness_failures"
+)
 
+start_engine() {
+    echo "→ Starting: ${SERVE_CMD[*]}"
+    echo ""
+    "${SERVE_CMD[@]}" &
+    TF_PID=$!
+}
+
+# Waits up to $1 seconds for the engine to answer /v1/models. 0 = ready, 1 = exited, 2 = timeout.
+wait_engine_ready() {
+    local limit="$1" i
+    for i in $(seq 1 "${limit}"); do
+        if engine_healthy 1; then
+            echo "→ Engine ready after ${i}s"
+            return 0
+        fi
+        if ! kill -0 "${TF_PID}" 2>/dev/null; then
+            return 1
+        fi
+        sleep 1
+    done
+    return 2
+}
+
+start_proxy() {
+    echo "→ Starting loop proxy on :${PORT} -> :${ENGINE_PORT}"
+    "${PROXY_CMD[@]}" &
+    PROXY_PID=$!
+    local i
+    for i in $(seq 1 20); do
+        if server_healthy; then
+            return 0
+        fi
+        if ! kill -0 "${PROXY_PID}" 2>/dev/null; then
+            echo "ERROR: loop proxy exited. See the log above."
+            return 1
+        fi
+        sleep 1
+    done
+    echo "ERROR: loop proxy did not answer on :${PORT}"
+    return 1
+}
+
+run_gate() {
+    local model_id
+    model_id="$(live_model_id)"
+    echo ""
+    echo "→ Post-start harness gate ..."
+    if python3 "${SCRIPT_DIR}/test_harness.py" --gate \
+        --base "http://127.0.0.1:${PORT}" \
+        --model "${model_id}"; then
+        echo "→ Harness gate: PASS"
+    else
+        local gate_rc=$?
+        echo "→ Harness gate: FAIL (exit ${gate_rc}) — server still running"
+        echo "  Re-run: python3 test_harness.py --base http://127.0.0.1:${PORT}"
+    fi
+    echo ""
+}
+
+start_engine
 echo "→ Waiting for engine on :${ENGINE_PORT} (first load can take a few minutes) ..."
-READY=false
-for i in $(seq 1 600); do
-    if curl -sf --max-time 1 "http://127.0.0.1:${ENGINE_PORT}/v1/models" >/dev/null 2>&1; then
-        echo "→ Engine ready after ${i}s"
-        READY=true
-        break
-    fi
-    if ! kill -0 "${TF_PID}" 2>/dev/null; then
+if ! wait_engine_ready 600; then
+    rc=$?
+    if [[ "${rc}" == 1 ]]; then
         echo "ERROR: tensorfold exited before it was ready. See the log above."
-        exit 1
+    else
+        echo "ERROR: server did not become ready within 600s."
+        kill -TERM "${TF_PID}" 2>/dev/null || true
     fi
-    sleep 1
-done
-
-if [[ "${READY}" != true ]]; then
-    echo "ERROR: server did not become ready within 600s."
-    kill -TERM "${TF_PID}" 2>/dev/null || true
     exit 1
 fi
 
-echo "→ Starting loop proxy on :${PORT} -> :${ENGINE_PORT}"
-python3 "${SCRIPT_DIR}/loop_proxy.py" --listen "${PORT}" --upstream "127.0.0.1:${ENGINE_PORT}" &
-PROXY_PID=$!
-for i in $(seq 1 20); do
-    if curl -sf --max-time 1 "http://127.0.0.1:${PORT}/v1/models" >/dev/null 2>&1; then
-        break
-    fi
-    if ! kill -0 "${PROXY_PID}" 2>/dev/null; then
-        echo "ERROR: loop proxy exited. See the log above."
-        exit 1
-    fi
-    sleep 1
-    if [[ "${i}" == 20 ]]; then
-        echo "ERROR: loop proxy did not answer on :${PORT}"
-        exit 1
-    fi
-done
+if ! start_proxy; then
+    exit 1
+fi
 
 LIVE_MODEL_ID="$(live_model_id)"
 
@@ -337,27 +443,73 @@ echo "  READY — TensorFold serving ${HF_MODEL}"
 echo "============================================================"
 echo "  API:        http://127.0.0.1:${PORT}/v1"
 echo "  Model ID:   ${LIVE_MODEL_ID}"
+echo "  Health:     http://127.0.0.1:${PORT}/harness/health"
 echo "  Kilo:       tensorfold-gemma4-abliterated/gemma-4-26b-a4b-abliterated-tensorfold  (kilo.json)"
 echo "  curl:       curl http://127.0.0.1:${PORT}/v1/chat/completions \\"
 echo "                -H 'Content-Type: application/json' \\"
 echo "                -d '{\"model\":\"${MODEL_ALIAS}\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"max_tokens\":32}'"
-echo "  harness:    python3 test_harness.py --gate"
+echo "  harness:    python3 test_harness.py --gate      # quick"
+echo "              python3 test_e2e_opencode.py        # full OpenCode task, ~5-15 min"
 echo "============================================================"
 
 if [[ "${HARNESS_GATE}" == true ]]; then
-    echo ""
-    echo "→ Post-start harness gate ..."
-    if python3 "${SCRIPT_DIR}/test_harness.py" --gate \
-        --base "http://127.0.0.1:${PORT}" \
-        --model "${LIVE_MODEL_ID}"; then
-        echo "→ Harness gate: PASS"
-    else
-        gate_rc=$?
-        echo "→ Harness gate: FAIL (exit ${gate_rc}) — server still running"
-        echo "  Re-run: python3 test_harness.py --base http://127.0.0.1:${PORT}"
-    fi
-    echo ""
+    run_gate
 fi
 
-wait "${TF_PID}" 2>/dev/null
+if [[ "${SUPERVISE}" != true ]]; then
+    wait "${TF_PID}" 2>/dev/null
+    cleanup
+fi
+
+# ── Supervisor ──────────────────────────────────────────────────────────────────
+# The proxy keeps answering (and holds client requests for up to 90 s) while
+# the engine is restarted, so a crash or hang costs the agent a pause, not the turn.
+misses=0
+restarts=0
+while true; do
+    sleep "${SUPERVISE_INTERVAL}"
+    if [[ "${SHUTTING_DOWN}" == true ]]; then
+        break
+    fi
+    if ! kill -0 "${PROXY_PID}" 2>/dev/null; then
+        log "→ [supervisor] loop proxy exited — restarting it"
+        stop_server_on_port "${PORT}" >/dev/null 2>&1 || true
+        start_proxy || log "→ [supervisor] proxy restart failed; will retry in ${SUPERVISE_INTERVAL}s"
+        continue
+    fi
+    reason=""
+    if ! kill -0 "${TF_PID}" 2>/dev/null; then
+        reason="engine process exited"
+    elif engine_healthy "${SUPERVISE_PROBE_TIMEOUT}"; then
+        misses=0
+        continue
+    else
+        misses=$((misses + 1))
+        if [[ "${misses}" -lt "${SUPERVISE_FAILS}" ]]; then
+            log "→ [supervisor] engine health probe failed (${misses}/${SUPERVISE_FAILS})"
+            continue
+        fi
+        reason="engine failed ${misses} health probes in a row"
+    fi
+    restarts=$((restarts + 1))
+    log "→ [supervisor] ${reason} — restart #${restarts}"
+    if [[ "${restarts}" -gt "${SUPERVISE_MAX_RESTARTS}" ]]; then
+        log "→ [supervisor] more than ${SUPERVISE_MAX_RESTARTS} restarts; giving up"
+        cleanup
+    fi
+    kill -TERM "${TF_PID}" 2>/dev/null || true
+    sleep 2
+    kill -KILL "${TF_PID}" 2>/dev/null || true
+    stop_server_on_port "${ENGINE_PORT}" >/dev/null 2>&1 || true
+    misses=0
+    start_engine
+    if wait_engine_ready 600; then
+        log "→ [supervisor] engine back on :${ENGINE_PORT}"
+        if [[ "${HARNESS_GATE}" == true ]]; then
+            run_gate
+        fi
+    else
+        log "→ [supervisor] engine did not come back; retrying in ${SUPERVISE_INTERVAL}s"
+    fi
+done
 cleanup
