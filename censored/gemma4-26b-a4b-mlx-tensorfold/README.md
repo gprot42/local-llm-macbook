@@ -1,7 +1,7 @@
 # Gemma 4 26B-A4B (base) — TensorFold
 
 Run the **base (censored) Gemma 4 26B-A4B** MoE on Apple Silicon with
-[TensorFold](https://github.com/ashhart/TensorFold) 0.3.6.3 (family `gemma4`).
+[TensorFold](https://github.com/ashhart/TensorFold) 0.6.6 (family `gemma4`).
 Text output. This is the **MoE** checkpoint (26B total / 4B active); TensorFold's
 Gemma 4 kernels cover the MoE layout only and **refuse the 31B dense** packs, so
 the dense `gemma-4-31B-it` MLX stacks stay on their own servers.
@@ -72,7 +72,7 @@ mlx-community/gemma-4-26b-a4b-it-4bit
 
 | File | Purpose |
 |------|---------|
-| `1_setup_download.sh` | venv, TensorFold `v0.5.0`, pull weights, write `.tensorfold_config` |
+| `1_setup_download.sh` | venv, TensorFold `v0.6.6`, pull weights, write `.tensorfold_config` |
 | `2_start_tensorfold.sh` | Engine on `:8102`, reliability proxy on `:8092`, supervisor (engine probed every 20 s, restarted on crash). Proxy self-test before start, harness gate after |
 | `loop_proxy.py` | Reliability proxy: repeat guard, step judge + retry, sampling defaults, `/harness/health` (same logic as the abliterated stack; ports and defaults differ) |
 | `harness_judge.py` | Pure judge rules for one reply (loops, symbol soup, narration, leaks, truncation, bad arguments); the abliterated stack's rules plus the two adjustments under *Calibration* |
@@ -89,7 +89,7 @@ Server defaults are `temperature=0.45`, `top_p=0.9`, `top_k=40`
 them) — the coding-agent values calibrated on the abliterated sibling, whose
 long agentic runs degenerate at Gemma's 1.0 / 0.95 / 64 chat preset; this pack
 has the same family and template. `min-p 0.05` is added when the installed
-TensorFold has `--min-p` (0.5.0+; the pinned 0.3.6.3 venv does not). The proxy
+TensorFold has `--min-p` (0.5.0+; the pinned v0.6.6 does). The proxy
 fills the same values into any request that omits them; a request that sets
 its own values wins. Thinking is **off** (`--no-thinking`); pass `--thinking`
 to open a think block for every request.
@@ -99,9 +99,10 @@ Context cap defaults to 131072 (server `-c`). The client `limit` in
 conservative window used across these stacks; raise it if you need more, keeping
 `context + output ≤` the server `-c`.
 
-Pinned to **TensorFold 0.5.0** (`TF_VERSION` in `1_setup_download.sh`) — the
-release with the `gemma4` MoE lane. Bump only after re-checking the model loads
-and drafted replies stay byte-identical to `"draft": false`.
+Pinned to **TensorFold 0.6.6** (`TF_VERSION` in `1_setup_download.sh`), upstream
+`ashhart/TensorFold`. The gemma4 MoE lane and the tool-call / thought-channel
+fixes are in this release. Bump only after re-checking the model loads and
+drafted replies stay byte-identical to `"draft": false`.
 
 ## Harness (`loop_proxy.py` + `harness_judge.py`)
 
@@ -120,8 +121,8 @@ reliability layer built for the abliterated Gemma 4 stack ([`../../uncensored/ge
   A failure cancels the generation at the engine, saves the discarded text
   under `.harness_failures/`, and retries the step with a fresh seed,
   temperature 0.3 → 0.2 and a corrective user message (the last attempt adds a
-  repetition penalty for loops; `min_p` and the penalty only reach an engine
-  that knows them, TensorFold 0.5.0+ — the pinned 0.3.6.3 drops them). After
+  repetition penalty for loops; `min_p` and the penalty reach the pinned
+  TensorFold 0.6.6). After
   three attempts the turn ends with a `[Harness] Stopped: …` message that says
   why. Plain chat (no tools) streams live; only a loop or a leak cuts it.
 - **Repeat guard.** A tool call that returns the same result again with no
@@ -158,9 +159,9 @@ repeat and churn guards, scripted engine scenarios), `python3 test_harness.py
 that is not this stack's `loop_proxy.py` (an old proxy or a bare engine). Run
 `./2_start_tensorfold.sh restart`.
 
-**`tensorfold info` rejects the repo** — the installed CLI is older than 0.3.6.3,
-or the pack is not the MoE checkpoint (dense Gemma 4 is refused). Re-run
-`./1_setup_download.sh`.
+**`tensorfold info` rejects the repo** — the installed CLI is older than the
+pinned release, or the pack is not the MoE checkpoint (dense Gemma 4 is refused).
+Re-run `./1_setup_download.sh`.
 
 **Lane refuses the checkpoint** — the `gemma4` kernels need `enable_moe_block`
 in every layer and **4-bit MLP** projections with only the **router at 8-bit**.

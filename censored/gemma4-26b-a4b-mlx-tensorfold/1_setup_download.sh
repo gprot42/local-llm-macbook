@@ -97,13 +97,12 @@ fi
 # shellcheck source=/dev/null
 source "${VENV_DIR}/bin/activate"
 python -m pip install --upgrade pip
-# Pinned to the release that ships the gemma4 MoE lane. Bump only after
-# re-checking that gemma-4-26B-A4B loads and drafted replies stay byte-exact
-# against "draft": false.
-TF_VERSION="${TF_VERSION:-fix-gemma-tool-call-colon-prefix}"
-# Fork branch carries the gemma4 tool-call fix (upstream PR ashhart/TensorFold#157).
-# Revert TF_REPO to ashhart/TensorFold and TF_VERSION to a release once the PR is merged+released.
-TF_REPO="${TF_REPO:-gprot42/TensorFold}"
+# Pinned to an upstream release. The gemma4 tool-call and thought-channel fixes
+# that lived on gprot42/TensorFold@fix-gemma-tool-call-colon-prefix are in
+# v0.6.0+. Bump only after re-checking that gemma-4-26B-A4B loads and drafted
+# replies stay byte-exact against "draft": false.
+TF_VERSION="${TF_VERSION:-v0.6.6}"
+TF_REPO="${TF_REPO:-ashhart/TensorFold}"
 python -m pip install --upgrade "git+https://github.com/${TF_REPO}.git@${TF_VERSION}"
 
 echo "→ $(tensorfold --version)"

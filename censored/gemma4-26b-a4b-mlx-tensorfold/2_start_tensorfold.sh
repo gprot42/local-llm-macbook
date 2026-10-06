@@ -14,7 +14,7 @@
 # coding-agent values calibrated on the abliterated sibling (Gemma's 1.0 / 0.95 /
 # 64 chat preset degenerates there in long agentic runs; same family and template
 # here). min-p 0.05 is added when the installed TensorFold has --min-p (0.5.0+;
-# the pinned 0.3.6.3 venv does not). A request that sets its own values wins.
+# the pinned v0.6.6 does). A request that sets its own values wins.
 #
 # Supervision (default on): after start, the engine is probed every 20 s and
 # restarted if the process exits or fails three probes in a row; the proxy is
