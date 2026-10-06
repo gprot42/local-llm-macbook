@@ -14,8 +14,26 @@
       },
       "models": {
         "gemma-4-26b-a4b-tensorfold": {
-          "name": "Gemma 4 26B-A4B base — TensorFold (DFlash, thinking off)",
+          "name": "Gemma 4 26B-A4B base — TensorFold (no thinking)",
           "reasoning": false,
+          "tool_call": true,
+          "temperature": true,
+          "limit": {
+            "context": 49152,
+            "output": 16384
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "gemma-4-26b-a4b-tensorfold-thinking": {
+          "name": "Gemma 4 26B-A4B base — TensorFold (thinking)",
+          "reasoning": true,
           "tool_call": true,
           "temperature": true,
           "limit": {

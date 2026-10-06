@@ -388,6 +388,42 @@ def _completion(text: str, *, model: str, stream: bool) -> bytes:
 
 # ---- request hygiene -------------------------------------------------------------
 
+# Thinking budget per OpenCode variant (it sends reasoning_effort low / medium / high once the model
+# entry says "reasoning": true). The engine closes the thought block after this many tokens, and the
+# per-step cap grows by the same amount so the answer or tool call still fits after the thinking.
+THINKING_BUDGETS = {"minimal": 512, "low": 1024, "medium": 2048, "high": 4096, "xhigh": 6144, "max": 6144}
+THINKING_DEFAULT_BUDGET = int(os.environ.get("HARNESS_THINKING_BUDGET", "2048"))
+THINKING_SUFFIX = "-thinking"   # "<served model>-thinking": the thinking entry in OpenCode's model picker
+
+
+def apply_thinking_model(payload: dict[str, Any]) -> bool:
+    """A request for "<model>-thinking" is a request for <model> with thinking on (unless the request sets
+    thinking itself, e.g. an OpenCode variant's reasoning_effort). True when the name was rewritten."""
+
+    model = payload.get("model")
+    if not (isinstance(model, str) and model.endswith(THINKING_SUFFIX)):
+        return False
+    payload["model"] = model[: -len(THINKING_SUFFIX)]
+    kwargs = payload.get("chat_template_kwargs") if isinstance(payload.get("chat_template_kwargs"), dict) else {}
+    if payload.get("reasoning_effort") is None and "enable_thinking" not in kwargs and "reasoning_effort" not in kwargs:
+        payload["chat_template_kwargs"] = {**kwargs, "enable_thinking": True}
+    return True
+
+
+def thinking_requested(payload: dict[str, Any]) -> str | None:
+    """The effort when the request turns thinking on (reasoning_effort, or chat_template_kwargs), else None."""
+
+    effort = payload.get("reasoning_effort")
+    kwargs = payload.get("chat_template_kwargs") if isinstance(payload.get("chat_template_kwargs"), dict) else {}
+    if effort is None:
+        effort = kwargs.get("reasoning_effort")
+    if kwargs.get("enable_thinking") is False or effort == "none":
+        return None
+    if isinstance(effort, str):
+        return effort
+    return "default" if kwargs.get("enable_thinking") is True else None
+
+
 def prepare_request(payload: dict[str, Any], cfg: Config, *, agentic: bool | None = None) -> dict[str, Any]:
     """Sampling defaults for omitted fields, the per-step token cap for agentic
     requests, include_usage on streams. Returns a summary for the log.
@@ -396,22 +432,34 @@ def prepare_request(payload: dict[str, Any], cfg: Config, *, agentic: bool | Non
 
     if agentic is None:
         agentic = bool(payload.get("tools"))
+    apply_thinking_model(payload)
     for key, value in cfg.defaults.items():
         if payload.get(key) is None:
             payload[key] = value
+    effort = thinking_requested(payload)
+    budget = 0
+    if effort is not None:
+        if payload.get("thinking_budget") is None:
+            payload["thinking_budget"] = THINKING_BUDGETS.get(effort, THINKING_DEFAULT_BUDGET)
+        try:
+            budget = max(0, int(payload["thinking_budget"]))
+        except (TypeError, ValueError):
+            budget = THINKING_DEFAULT_BUDGET
     if agentic and cfg.step_max_tokens:
+        cap = cfg.step_max_tokens + budget
         asked = payload.get("max_tokens") or payload.get("max_completion_tokens")
         try:
             asked = int(asked) if asked is not None else None
         except (TypeError, ValueError):
             asked = None
-        payload["max_tokens"] = min(asked, cfg.step_max_tokens) if asked else cfg.step_max_tokens
+        payload["max_tokens"] = min(asked, cap) if asked else cap
         payload.pop("max_completion_tokens", None)
     if payload.get("stream"):
         options = payload.get("stream_options") if isinstance(payload.get("stream_options"), dict) else {}
         options.setdefault("include_usage", True)
         payload["stream_options"] = options
-    return {"agentic": agentic, "max_tokens": payload.get("max_tokens"), "temperature": payload.get("temperature")}
+    return {"agentic": agentic, "max_tokens": payload.get("max_tokens"), "temperature": payload.get("temperature"),
+            "thinking": effort}
 
 
 def shrinking_rewrite(messages: list[dict[str, Any]], tool_calls: list[dict[str, Any]]) -> Verdict:
@@ -1153,6 +1201,13 @@ def _hygiene_self_test() -> None:
     greedy = {"model": "m", "temperature": 0, "messages": [], "max_tokens": 20000}
     prepare_request(greedy, cfg)
     assert greedy["temperature"] == 0 and greedy["max_tokens"] == 20000, "chat is not capped; zero is not 'absent'"
+    thinking = {"model": "gemma-4-26b-a4b-tensorfold-thinking", "messages": [], "max_tokens": 32}
+    summary = prepare_request(thinking, cfg)
+    assert thinking["model"] == "gemma-4-26b-a4b-tensorfold" and thinking["chat_template_kwargs"]["enable_thinking"] is True
+    assert thinking["thinking_budget"] == THINKING_DEFAULT_BUDGET and summary["thinking"] == "default"
+    effort = {"model": "m-thinking", "reasoning_effort": "medium", "tools": [{}], "messages": [], "max_tokens": 16384}
+    prepare_request(effort, cfg)
+    assert effort["model"] == "m" and effort["thinking_budget"] == 2048 and effort["max_tokens"] == 6144 + 2048
     retry = retry_payload(agentic, 2, Verdict(False, "loop", "x"), 3)
     assert retry["messages"][-1]["role"] == "user" and retry["messages"][-1]["content"].startswith("[Harness]")
     assert retry["temperature"] == 0.3 and retry["min_p"] == 0.05 and retry["seed"] and "repetition_penalty" not in retry

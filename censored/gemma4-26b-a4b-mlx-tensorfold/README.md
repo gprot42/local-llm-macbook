@@ -91,8 +91,11 @@ long agentic runs degenerate at Gemma's 1.0 / 0.95 / 64 chat preset; this pack
 has the same family and template. `min-p 0.05` is added when the installed
 TensorFold has `--min-p` (0.5.0+; the pinned v0.6.6 does). The proxy
 fills the same values into any request that omits them; a request that sets
-its own values wins. Thinking is **off** (`--no-thinking`); pass `--thinking`
-to open a think block for every request.
+its own values wins. The engine starts with thinking **off** (`--no-thinking`).
+OpenCode's `…-thinking` model turns it on per request (`reasoning_effort`, or
+`enable_thinking`); the proxy budgets 1,024 / 2,048 / 4,096 tokens for low /
+medium / high and raises that step's token cap by the same amount. Pass
+`--thinking` on the start script to think on every request.
 
 Context cap defaults to 131072 (server `-c`). The client `limit` in
 `kilo.json` / `opencode.json` is 49152 / output 16384 (usable ~33k) — the same
@@ -107,7 +110,7 @@ drafted replies stay byte-identical to `"draft": false`.
 ## Harness (`loop_proxy.py` + `harness_judge.py`)
 
 `loop_proxy.py` owns `:8092` and forwards to the engine on `:8102`. It is the
-reliability layer built for the abliterated Gemma 4 stack ([`../../uncensored/gemma4-26b-a4b-abliterated-mlx-tensorfold/`](../../uncensored/gemma4-26b-a4b-abliterated-mlx-tensorfold/), see its
+reliability layer built for the abliterated Gemma 4 stack ([`../../uncensored/archived/gemma4-26b-a4b-abliterated-mlx-tensorfold/`](../../uncensored/archived/gemma4-26b-a4b-abliterated-mlx-tensorfold/), see its
 `findings.md` for the failure shapes and the calibration method), ported here on
 2026-09-30 with this stack's ports and sampling:
 
