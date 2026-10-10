@@ -2,3 +2,5 @@ venv/
 .tensorfold_config
 models/
 __pycache__/
+.tensorfold_supervisor.pid
+.tensorfold_stack.log

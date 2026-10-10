@@ -33,15 +33,24 @@
 #   --no-drafts            One token per round
 #   --harness-gate         Run test_harness.py --gate after ready (default)
 #   --no-harness-gate      Skip the post-start gate
-#   restart                Free the port, then start
-#   stop                   Stop whatever is bound to the port
+#   start                  Start in the background (same as the default)
+#   --foreground, -f       Run attached to this terminal instead of detaching
+#   restart                Free the ports, then start (in the background)
+#   stop                   Stop the background server and free the ports
 #   status                 Show whether /v1/models answers
+#   logs                   Tail the background server's log
 #   --help, -h             Show this help
+#
+# By default the server starts DETACHED: it keeps running after this terminal
+# closes, and the command returns right away. Use --foreground to watch it live.
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/.tensorfold_config"
+PID_FILE="${SCRIPT_DIR}/.tensorfold_supervisor.pid"   # the detached start script, so stop/restart can end it
+STACK_LOG="${SCRIPT_DIR}/.tensorfold_stack.log"       # detached stdout/stderr
+ORIG_ARGS=("$@")
 
 PORT=8096
 ENGINE_PORT=8106
@@ -52,9 +61,11 @@ TOOL_TEMPLATE="${SCRIPT_DIR}/chat_template_tools.jinja"
 USE_TOOL_TEMPLATE=true
 THINKING=false
 NO_DRAFTS=false
+FOREGROUND=false
 DO_RESTART=false
 DO_STOP=false
 DO_STATUS=false
+DO_LOGS=false
 HARNESS_GATE=true
 
 # Native binary lives in Homebrew's bin; put it on PATH for this process.
@@ -109,6 +120,41 @@ live_model_id() {
         || echo "${MODEL_ALIAS:-?}"
 }
 
+stop_supervisor() {
+    local pid
+    [[ -f "${PID_FILE}" ]] || return 0
+    pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+        echo "→ Stopping background server (pid ${pid}) ..."
+        kill -TERM "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
+        sleep 2
+        kill -KILL "-${pid}" 2>/dev/null || true
+        kill -KILL "${pid}" 2>/dev/null || true
+    fi
+    rm -f "${PID_FILE}"
+}
+
+# Relaunch this script in its own session (detached from the terminal), logging
+# to STACK_LOG, and record the detached pid in PID_FILE. start_new_session runs
+# os.setsid in the child, so macOS (no setsid binary) detaches cleanly too.
+run_detached() {
+    local relaunch=("$0")
+    [[ ${#ORIG_ARGS[@]} -gt 0 ]] && relaunch+=("${ORIG_ARGS[@]}")
+    relaunch+=(--foreground)
+    : > "${STACK_LOG}" 2>/dev/null || true
+    python3 - "${STACK_LOG}" "${PID_FILE}" "${relaunch[@]}" <<'PY'
+import os, sys, subprocess
+log, pidfile = sys.argv[1], sys.argv[2]
+cmd = sys.argv[3:]
+f = open(log, "ab", buffering=0)
+p = subprocess.Popen(cmd, stdout=f, stderr=f, stdin=subprocess.DEVNULL,
+                     start_new_session=True, close_fds=True)
+with open(pidfile, "w") as pf:
+    pf.write(str(p.pid))
+print(p.pid)
+PY
+}
+
 # ── Parse args ────────────────────────────────────────────────────────────────
 args=("$@")
 i=0
@@ -118,9 +164,13 @@ while [[ ${i} -lt ${#args[@]} ]]; do
             sed -n '3,33p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
+        start) i=$((i + 1)) ;;   # background is the default; accept it explicitly
+        --foreground|-f) FOREGROUND=true; i=$((i + 1)) ;;
+        --detach|-d) FOREGROUND=false; i=$((i + 1)) ;;
         restart) DO_RESTART=true; i=$((i + 1)) ;;
         stop) DO_STOP=true; i=$((i + 1)) ;;
         status) DO_STATUS=true; i=$((i + 1)) ;;
+        logs) DO_LOGS=true; i=$((i + 1)) ;;
         --port)
             PORT="${args[$((i + 1))]:?--port needs a value}"
             ENGINE_PORT=$((PORT + 10))
@@ -182,7 +232,16 @@ if [[ "${DO_STATUS}" == true ]]; then
     exit 1
 fi
 
+if [[ "${DO_LOGS}" == true ]]; then
+    if [[ ! -f "${STACK_LOG}" ]]; then
+        echo "→ No log yet at ${STACK_LOG}. Start the server first."
+        exit 1
+    fi
+    exec tail -n 200 -f "${STACK_LOG}"
+fi
+
 if [[ "${DO_STOP}" == true ]]; then
+    stop_supervisor
     stop_server_on_port "${PORT}"
     stop_server_on_port "${ENGINE_PORT}"
     echo "→ Stopped (ports ${PORT} and ${ENGINE_PORT})"
@@ -207,6 +266,7 @@ fi
 
 if [[ "${DO_RESTART}" == true ]]; then
     echo "→ restart: clearing ports ${PORT} and ${ENGINE_PORT} ..."
+    stop_supervisor
     stop_server_on_port "${PORT}"
     stop_server_on_port "${ENGINE_PORT}"
 elif [[ -n "$(port_pids)" ]]; then
@@ -230,6 +290,19 @@ elif [[ -n "$(port_pids)" ]]; then
     echo ""
     echo "  Free it with: ./2_start_tensorfold.sh restart"
     exit 1
+fi
+
+# Default: re-launch detached and return. The child re-runs with --foreground
+# and falls through to the real serve loop below.
+if [[ "${FOREGROUND}" != true ]]; then
+    echo "→ Starting Qwen3.8-27B OBLITERATED in the background ..."
+    pid="$(run_detached)"
+    echo "→ Background server started (supervisor pid ${pid})"
+    echo "  API:   http://127.0.0.1:${PORT}/v1   (ready in ~30s — watch with 'logs')"
+    echo "  Logs:  ./2_start_tensorfold.sh logs"
+    echo "  Stop:  ./2_start_tensorfold.sh stop"
+    echo "  Check: ./2_start_tensorfold.sh status"
+    exit 0
 fi
 
 # Weights: a local directory is validated by its files; a Hub repo is pulled
