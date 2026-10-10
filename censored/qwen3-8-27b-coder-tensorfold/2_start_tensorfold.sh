@@ -132,8 +132,18 @@ stop_supervisor() {
 # to STACK_LOG, and record the detached pid in PID_FILE. start_new_session runs
 # os.setsid in the child, so macOS (no setsid binary) detaches cleanly too.
 run_detached() {
-    local relaunch=("$0")
-    [[ ${#ORIG_ARGS[@]} -gt 0 ]] && relaunch+=("${ORIG_ARGS[@]}")
+    local relaunch=("$0") a
+    # Drop action subcommands: the parent already handled them, and passing
+    # 'restart' to the child would make its stop_supervisor kill itself (the pid
+    # file now holds the child's own pid). The child only needs to start.
+    if [[ ${#ORIG_ARGS[@]} -gt 0 ]]; then
+        for a in "${ORIG_ARGS[@]}"; do
+            case "${a}" in
+                start|restart|stop|status|logs) ;;
+                *) relaunch+=("${a}") ;;
+            esac
+        done
+    fi
     relaunch+=(--foreground)
     : > "${STACK_LOG}" 2>/dev/null || true
     python3 - "${STACK_LOG}" "${PID_FILE}" "${relaunch[@]}" <<'PY'
