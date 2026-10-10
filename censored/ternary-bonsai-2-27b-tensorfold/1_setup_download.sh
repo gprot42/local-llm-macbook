@@ -88,10 +88,13 @@ fi
 # shellcheck source=/dev/null
 source "${VENV_DIR}/bin/activate"
 python -m pip install --upgrade pip
-# Bonsai landed in 0.3.6.3. Do not float to main: an unpinned install can pick
-# up a bad pre-release. Bump TF_VERSION after re-checking draft==serial on a
-# newer tag.
-TF_VERSION="${TF_VERSION:-v0.3.6.3}"
+# Bonsai landed in 0.3.6.3. v0.6.6 is the latest Python-engine release and still
+# serves this checkpoint (model_type prism_hadamard_qwen35, kernels qwen/prism/v1).
+# TensorFold 1.0+ is a native binary that does NOT serve Bonsai yet — it refuses
+# prism_hadamard_qwen35 and points back to the 0.6 line — so this stack stays on
+# the pip/venv Python engine. Do not float to main; bump TF_VERSION only after
+# re-checking draft==serial on a newer tag.
+TF_VERSION="${TF_VERSION:-v0.6.6}"
 python -m pip install --upgrade "git+https://github.com/ashhart/TensorFold.git@${TF_VERSION}"
 
 echo "→ $(tensorfold --version)"

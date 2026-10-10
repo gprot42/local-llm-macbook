@@ -1,7 +1,7 @@
 # Ternary Bonsai 2 27B — TensorFold
 
 Run **Ternary Bonsai 2 27B** on Apple Silicon with [TensorFold](https://github.com/ashhart/TensorFold)
-0.3.6.3 (family `bonsai`). Same model as
+0.6.6 (family `bonsai`). Same model as
 [`../archive/ternary-bonsai-2-27b-gguf-llamacpp/`](../archive/ternary-bonsai-2-27b-gguf-llamacpp/) (archived),
 different weights and engine. This API is **text only**. Image input stays on
 the GGUF sibling (`:8089`).
@@ -62,7 +62,7 @@ prism-ml/Ternary-Bonsai-2-27B-mlx-2bit
 
 | File | Purpose |
 |------|---------|
-| `1_setup_download.sh` | venv, TensorFold `v0.3.6.3`, pull weights, write `.tensorfold_config` |
+| `1_setup_download.sh` | venv, TensorFold `v0.6.6` (pip), pull weights, write `.tensorfold_config` |
 | `2_start_tensorfold.sh` | Engine on `:8101`, loop proxy on `:8091`. Harness gate on by default |
 | `loop_proxy.py` | Repeat guard in front of the engine |
 | `test_harness.py` | Live API checks (tools, stream, multi-turn) |
@@ -88,7 +88,7 @@ Context cap is 262144 tokens (prompt + reply), the checkpoint maximum. Cap it lo
 ./2_start_tensorfold.sh --context 131072
 ```
 
-Pinned to **TensorFold 0.3.6.3** (`TF_VERSION` in `1_setup_download.sh`). That is the release that added this pack. Bump the pin only after re-checking that drafted replies stay byte-identical to `"draft": false`.
+Pinned to **TensorFold 0.6.6** (`TF_VERSION` in `1_setup_download.sh`), the latest **Python-engine** release that serves this pack. Bumped from 0.3.6.3 on 2026-10-10 and verified on an M5 Max: `tensorfold info` loads it (model_type `prism_hadamard_qwen35`, `kernels qwen/prism/v1`), it serves, and drafted replies stay byte-identical to `"draft": false`. **TensorFold 1.0+ (the native binary) does not serve Bonsai** — it refuses `prism_hadamard_qwen35` and points back to the 0.6 line — so this stack stays on the pip/venv Python engine, unlike the Qwen3.8 stacks which moved to native 1.0.5. Bump the pin only after re-checking exactness on a newer tag.
 
 ## Harness
 
@@ -111,7 +111,7 @@ Pinned to **TensorFold 0.3.6.3** (`TF_VERSION` in `1_setup_download.sh`). That i
 
 | | `ternary-bonsai-2-27b-gguf-llamacpp` | this folder |
 |--|--|--|
-| Engine | PrismML llama.cpp fork | TensorFold 0.3.6.3, DFlash2 |
+| Engine | PrismML llama.cpp fork | TensorFold 0.6.6, DFlash2 |
 | Weights | `PQ2_0` GGUF + mmproj | MLX 2-bit pack |
 | Images | yes | no |
 | Port | 8089 (engine 8099) | 8091 (engine 8101) |
@@ -123,7 +123,7 @@ Do not load both at once on 128 GB. Do not load this next to Qwen 3.8 TensorFold
 
 **`tensorfold info` rejects the repo**
 
-The installed CLI is older than 0.3.6.3, or the pack is not the version-1 Prism contract (blocks of 1024, explicit signs, grouped DeltaNet, no MTP head). Re-run `./1_setup_download.sh`.
+The installed CLI is older than 0.6.6, or the pack is not the version-1 Prism contract (blocks of 1024, explicit signs, grouped DeltaNet, no MTP head). Re-run `./1_setup_download.sh`.
 
 **Setup downloaded the CLI but not the weights**
 
