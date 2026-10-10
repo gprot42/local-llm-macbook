@@ -138,8 +138,18 @@ stop_supervisor() {
 # to STACK_LOG, and record the detached pid in PID_FILE. start_new_session runs
 # os.setsid in the child, so macOS (no setsid binary) detaches cleanly too.
 run_detached() {
-    local relaunch=("$0")
-    [[ ${#ORIG_ARGS[@]} -gt 0 ]] && relaunch+=("${ORIG_ARGS[@]}")
+    local relaunch=("$0") a
+    # Drop action subcommands: the parent already handled them, and passing
+    # 'restart' to the child would make its stop_supervisor kill itself (the pid
+    # file now holds the child's own pid). The child only needs to start.
+    if [[ ${#ORIG_ARGS[@]} -gt 0 ]]; then
+        for a in "${ORIG_ARGS[@]}"; do
+            case "${a}" in
+                start|restart|stop|status|logs) ;;
+                *) relaunch+=("${a}") ;;
+            esac
+        done
+    fi
     relaunch+=(--foreground)
     : > "${STACK_LOG}" 2>/dev/null || true
     python3 - "${STACK_LOG}" "${PID_FILE}" "${relaunch[@]}" <<'PY'
@@ -334,6 +344,14 @@ if [[ "${USE_TOOL_TEMPLATE}" == true && ! -f "${TOOL_TEMPLATE}" ]]; then
     echo "       to serve with the checkpoint's own template (tool calls will not render)."
     exit 1
 fi
+
+echo "→ Proxy self-test ..."
+if ! python3 "${SCRIPT_DIR}/loop_proxy.py" --self-test >/dev/null 2>&1; then
+    echo "ERROR: loop_proxy.py --self-test failed. Run it directly to see why:"
+    echo "  python3 ${SCRIPT_DIR}/loop_proxy.py --self-test"
+    exit 1
+fi
+echo "→ Proxy self-test: ok"
 echo ""
 
 TF_PID=""
@@ -417,8 +435,15 @@ if [[ "${READY}" != true ]]; then
     exit 1
 fi
 
-echo "→ Starting loop proxy on :${PORT} -> :${ENGINE_PORT}"
-python3 "${SCRIPT_DIR}/loop_proxy.py" --listen "${PORT}" --upstream "127.0.0.1:${ENGINE_PORT}" &
+echo "→ Starting loop proxy (reliability layer) on :${PORT} -> :${ENGINE_PORT}"
+# Greedy defaults (the OBLITERATUS setting); the judge+retry ladder adds a
+# temperature/seed only on a detected loop, which is what breaks this model's
+# degenerate repeats. Failures are recorded under .harness_failures/.
+python3 "${SCRIPT_DIR}/loop_proxy.py" \
+    --listen "${PORT}" \
+    --upstream "127.0.0.1:${ENGINE_PORT}" \
+    --defaults "temperature=0,top_p=1" \
+    --failures-dir "${SCRIPT_DIR}/.harness_failures" &
 PROXY_PID=$!
 for i in $(seq 1 20); do
     if curl -sf --max-time 1 "http://127.0.0.1:${PORT}/v1/models" >/dev/null 2>&1; then

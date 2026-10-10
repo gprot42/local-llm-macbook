@@ -4,3 +4,4 @@ models/
 __pycache__/
 .tensorfold_supervisor.pid
 .tensorfold_stack.log
+.harness_failures/
