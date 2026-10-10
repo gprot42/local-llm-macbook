@@ -1,31 +1,38 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 1_setup_download.sh — Install TensorFold and download Qwen3.8-27B
+# 1_setup_download.sh — native TensorFold (v1.0.x) for Qwen3.8-27B (aligned)
 #
-# TensorFold (https://github.com/ashhart/TensorFold) serves this family from
-# the tested MLX 4-bit checkpoint. Lane kernels want 4-bit weights in groups
-# of 64. The mtplx sibling's mlx-community / Youssofal ids are a different
-# conversion and are not the default here.
+# TensorFold 1.0+ is a native Zig binary; it is no longer pip-installable
+# (`pip install git+...` stops with a message pointing here). This script
+# installs the native binary with Homebrew and pulls the MLX 4-bit checkpoint
+# and drafter into the Hugging Face cache — no venv, no pip. The loop proxy and
+# harness run on the system python3 (standard library only).
 #
 #   HF model   Vontra/Qwen3.8-27B-MLX-4bit     (~16.1 GB)
 #   Drafter    z-lab/Qwen3.8-27B-DFlash2       (~3.8 GB, optional)
 #
 # Usage:
-#   ./1_setup_download.sh                 # venv + CLI + model + drafter
-#   ./1_setup_download.sh --deps-only     # venv + CLI only
+#   ./1_setup_download.sh                 # brew install + model + drafter
+#   ./1_setup_download.sh --deps-only     # brew install only
 #   ./1_setup_download.sh --no-drafter    # model only (serial / no DFlash2)
 #   ./1_setup_download.sh org/repo        # different main checkpoint
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="${SCRIPT_DIR}/venv"
 CONFIG_FILE="${SCRIPT_DIR}/.tensorfold_config"
 
 DEFAULT_MODEL="Vontra/Qwen3.8-27B-MLX-4bit"
 DEFAULT_DRAFTER="z-lab/Qwen3.8-27B-DFlash2"
 MODEL_ALIAS="${QWEN38_ALIAS:-qwen3.8-27b-tensorfold}"
 CONTEXT="${QWEN38_CONTEXT:-262144}"
+
+# TensorFold native binary. 1.0.5 is the first release whose Qwen3.8-27B Metal
+# kernels compile on macOS 26.3 / 27 (Metal 4.1); earlier 1.0.x crash at load
+# with LibraryLoad. Bump only after re-checking that the checkpoint loads
+# (`tensorfold info`) and a drafted reply equals `"draft": false`.
+TF_FORMULA="${TF_FORMULA:-ashhart/tensorfold/tensorfold}"
+TF_MIN_VERSION="${TF_MIN_VERSION:-1.0.5}"
 
 DEPS_ONLY=false
 WITH_DRAFTER=true
@@ -50,29 +57,51 @@ if [[ "$(uname -m)" != "arm64" ]]; then
     exit 1
 fi
 
-pick_python() {
-    local candidate ver major minor
-    for candidate in /opt/homebrew/bin/python3.12 python3.12 python3; do
-        if ! command -v "${candidate}" >/dev/null 2>&1; then
-            continue
-        fi
-        ver="$("${candidate}" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
-        major="${ver%%.*}"
-        minor="${ver#*.}"
-        if [[ "${major}" -ge 3 && "${minor}" -ge 11 ]]; then
-            command -v "${candidate}"
+# Put Homebrew's bin on PATH for this process so a fresh install is found.
+for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+    [[ -d "${brew_bin}" ]] && case ":${PATH}:" in *":${brew_bin}:"*) ;; *) PATH="${brew_bin}:${PATH}" ;; esac
+done
+export PATH
+
+version_ge() { [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2" ]]; }
+
+ensure_tensorfold() {
+    local have ver
+    if command -v tensorfold >/dev/null 2>&1; then
+        ver="$(tensorfold --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        if [[ -n "${ver}" ]] && version_ge "${ver}" "${TF_MIN_VERSION}"; then
+            echo "→ TensorFold: $(tensorfold --version 2>&1 | head -1) (${TF_MIN_VERSION}+ OK)"
             return 0
         fi
-    done
-    return 1
+        echo "→ TensorFold ${ver:-unknown} is older than ${TF_MIN_VERSION}; upgrading ..."
+    fi
+    if ! command -v brew >/dev/null 2>&1; then
+        echo "ERROR: Homebrew not found. Install the native binary one of these ways:"
+        echo "         brew install ${TF_FORMULA}"
+        echo "       or download the macOS arm64 archive from:"
+        echo "         https://github.com/ashhart/TensorFold/releases"
+        exit 1
+    fi
+    echo "→ Installing the native TensorFold binary: brew install ${TF_FORMULA}"
+    if command -v tensorfold >/dev/null 2>&1; then
+        brew upgrade "${TF_FORMULA##*/}" 2>/dev/null || brew install "${TF_FORMULA}"
+    else
+        brew install "${TF_FORMULA}"
+    fi
+    if ! command -v tensorfold >/dev/null 2>&1; then
+        echo "ERROR: tensorfold is still not on PATH after install."
+        exit 1
+    fi
+    ver="$(tensorfold --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    if ! version_ge "${ver:-0}" "${TF_MIN_VERSION}"; then
+        echo "ERROR: installed TensorFold ${ver:-unknown} is below ${TF_MIN_VERSION}."
+        exit 1
+    fi
+    echo "→ TensorFold: $(tensorfold --version 2>&1 | head -1)"
 }
 
-PY="$(pick_python)" || {
-    echo "ERROR: TensorFold needs Python 3.11+. Install it with: brew install python@3.12"
-    exit 1
-}
+ensure_tensorfold
 
-echo "→ Python: ${PY} ($("${PY}" --version))"
 echo "→ Model:  ${MODEL}"
 if [[ "${WITH_DRAFTER}" == true ]]; then
     echo "→ Draft:  ${DEFAULT_DRAFTER}"
@@ -80,29 +109,11 @@ else
     echo "→ Draft:  off"
 fi
 
-if [[ ! -d "${VENV_DIR}" ]]; then
-    echo "→ Creating venv at ${VENV_DIR}"
-    "${PY}" -m venv "${VENV_DIR}"
-fi
-
-# shellcheck source=/dev/null
-source "${VENV_DIR}/bin/activate"
-python -m pip install --upgrade pip
-# Pinned to a verified-good release rather than tracking the default branch:
-# 0.3.4 shipped a prompt-processing regression that 0.3.4.1 fixed, so an
-# unpinned install could pick up a bad pre-release. Bump this after verifying a
-# newer tag (draft==serial byte-exact + prefill speed) — see TF_VERSION below.
-TF_VERSION="${TF_VERSION:-v0.3.4.1}"
-python -m pip install --upgrade "git+https://github.com/ashhart/TensorFold.git@${TF_VERSION}"
-
-echo "→ $(tensorfold --version)"
 echo ""
-tensorfold models
-echo ""
-echo "→ Checking ${MODEL} (config.json only, no weights) ..."
+echo "→ Checking ${MODEL} ..."
 if ! tensorfold info "${MODEL}"; then
     echo "ERROR: tensorfold info failed for ${MODEL}."
-    echo "       This CLI only serves families it has kernels for."
+    echo "       The native engine must recognise it (qwen3_5, 4-bit group 64)."
     exit 1
 fi
 
@@ -138,6 +149,7 @@ echo ""
 echo "============================================================"
 echo "  SETUP DONE"
 echo "============================================================"
+echo "  Engine:  $(tensorfold --version 2>&1 | head -1) (native)"
 echo "  Model:   ${MODEL}"
 echo "  Drafter: ${DRAFTER:-none}"
 echo "  Alias:   ${MODEL_ALIAS}"

@@ -8,34 +8,50 @@
 # Port 8769 sits beside Qwen3.8 mtplx on :8766 and Qwen3.6 mtplx on :8765.
 # Do not use :8080: Gemma and Diffusion stacks already share that port.
 #
-# Thinking is off by default, same as the mtplx coder stack, so tool calls
-# are not wrapped in a think block. Pass --thinking to turn it on.
+# TensorFold 1.0+ is a native binary (brew install ashhart/tensorfold/tensorfold);
+# there is no venv. The loop proxy and harness run on the system python3.
+#
+# Sampling follows the Qwen3 coder preset (temperature 0.6, top-p 0.95, top-k 20).
+# NOTE: on the native engine Qwen3.8-27B drafts GREEDY requests only — a sampled
+# request decodes plain (~19 tok/s), so the DFlash2 drafter does not accelerate
+# the default preset. Serve greedy (edit the preset) if you want the draft speed.
+# Thinking is off by default. Pass --thinking to turn it on.
+#
+# The Vontra checkpoint's own chat template renders tools, so no --chat-template
+# is needed here (unlike the obliterated sibling).
 #
 # Options:
-#   --port PORT       Listen port (default 8769)
-#   --context N       Prompt + reply cap (default 262144, the checkpoint max; 0 = model max)
-#   --model REPO      Hugging Face repo (default from .tensorfold_config)
-#   --thinking        Open the think block (Qwen3.8 reasoning-effort medium)
-#   --no-thinking     Skip the think block (default)
-#   --no-drafts       One token per round
-#   --harness-gate    Run test_harness.py --gate after ready (default)
-#   --no-harness-gate Skip the post-start gate
-#   restart           Free the port, then start
-#   stop              Stop whatever is bound to the port
-#   status            Show whether /v1/models answers
-#   --help, -h        Show this help
+#   --port PORT            Listen port (default 8769)
+#   --context N            Prompt + reply cap (default 262144, the checkpoint max; 0 = model max)
+#   --model REPO           Hugging Face repo (default from .tensorfold_config)
+#   --prompt-cache-gib N   Prompt-state cache size, GiB (default 16; 0 turns it off)
+#   --thinking             Open the think block (Qwen3.8 reasoning-effort medium)
+#   --no-thinking          Skip the think block (default)
+#   --no-drafts            One token per round
+#   --harness-gate         Run test_harness.py --gate after ready (default)
+#   --no-harness-gate      Skip the post-start gate
+#   restart                Free the port, then start
+#   stop                   Stop whatever is bound to the port
+#   status                 Show whether /v1/models answers
+#   --help, -h             Show this help
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="${SCRIPT_DIR}/venv"
 CONFIG_FILE="${SCRIPT_DIR}/.tensorfold_config"
 
 PORT=8769
 ENGINE_PORT=8779
 CLI_CONTEXT=""
 MODEL_OVERRIDE=""
+PROMPT_CACHE_GIB="${QWEN38_PROMPT_CACHE_GIB:-16}"
 THINKING=false
+
+# Native binary lives in Homebrew's bin; put it on PATH for this process.
+for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+    [[ -d "${brew_bin}" ]] && case ":${PATH}:" in *":${brew_bin}:"*) ;; *) PATH="${brew_bin}:${PATH}" ;; esac
+done
+export PATH
 NO_DRAFTS=false
 DO_RESTART=false
 DO_STOP=false
@@ -45,7 +61,7 @@ HARNESS_GATE=true
 stop_server_on_port() {
     local port="$1"
     local pids
-    pids="$(lsof -ti ":${port}" 2>/dev/null || true)"
+    pids="$(lsof -nP -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)"
     if [[ -z "${pids}" ]]; then
         return 0
     fi
@@ -53,7 +69,7 @@ stop_server_on_port() {
     # shellcheck disable=SC2086
     kill -TERM ${pids} 2>/dev/null || true
     sleep 2
-    pids="$(lsof -ti ":${port}" 2>/dev/null || true)"
+    pids="$(lsof -nP -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)"
     if [[ -n "${pids}" ]]; then
         echo "→ Force-stopping stubborn process(es) ..."
         # shellcheck disable=SC2086
@@ -63,7 +79,7 @@ stop_server_on_port() {
 }
 
 port_pids() {
-    lsof -ti ":${PORT}" 2>/dev/null || true
+    lsof -nP -ti "tcp:${PORT}" -sTCP:LISTEN 2>/dev/null || true
 }
 
 describe_port_holder() {
@@ -111,6 +127,10 @@ while [[ ${i} -lt ${#args[@]} ]]; do
             MODEL_OVERRIDE="${args[$((i + 1))]:?--model needs a value}"
             i=$((i + 2))
             ;;
+        --prompt-cache-gib)
+            PROMPT_CACHE_GIB="${args[$((i + 1))]:?--prompt-cache-gib needs a value}"
+            i=$((i + 2))
+            ;;
         --thinking) THINKING=true; i=$((i + 1)) ;;
         --no-thinking) THINKING=false; i=$((i + 1)) ;;
         --no-drafts) NO_DRAFTS=true; i=$((i + 1)) ;;
@@ -122,6 +142,12 @@ while [[ ${i} -lt ${#args[@]} ]]; do
             ;;
     esac
 done
+
+if ! command -v tensorfold >/dev/null 2>&1; then
+    echo "ERROR: tensorfold (native binary) not found on PATH."
+    echo "       Run ./1_setup_download.sh  (it brew-installs ashhart/tensorfold/tensorfold)."
+    exit 1
+fi
 
 if [[ "${DO_STATUS}" == true ]]; then
     echo "=== TensorFold status (port ${PORT}) ==="
@@ -166,13 +192,6 @@ if [[ -n "${CLI_CONTEXT}" ]]; then
     CONTEXT="${CLI_CONTEXT}"
 fi
 
-if [[ ! -d "${VENV_DIR}" ]]; then
-    echo "ERROR: venv not found at ${VENV_DIR}. Run ./1_setup_download.sh first."
-    exit 1
-fi
-# shellcheck source=/dev/null
-source "${VENV_DIR}/bin/activate"
-
 if [[ "${DO_RESTART}" == true ]]; then
     echo "→ restart: clearing ports ${PORT} and ${ENGINE_PORT} ..."
     stop_server_on_port "${PORT}"
@@ -200,26 +219,22 @@ elif [[ -n "$(port_pids)" ]]; then
     exit 1
 fi
 
-weights_cached() {
-    python3 - "$1" <<'PY'
-import sys
-try:
-    from huggingface_hub import snapshot_download
-    snapshot_download(sys.argv[1], local_files_only=True)
-except Exception:
-    sys.exit(1)
-PY
-}
-
+# A local directory is validated by its files; a Hub repo is pulled (tensorfold
+# pull is idempotent — it fetches only the pieces it lacks).
 ensure_weights() {
     local repo
     for repo in "$@"; do
         [[ -z "${repo}" ]] && continue
-        if weights_cached "${repo}"; then
-            echo "→ Cached: ${repo}"
-            continue
+        if [[ -d "${repo}" ]]; then
+            if [[ -f "${repo}/config.json" && -f "${repo}/model.safetensors.index.json" ]]; then
+                echo "→ Local weights: ${repo}"
+                continue
+            fi
+            echo "ERROR: ${repo} is not a complete MLX checkpoint."
+            echo "       Run ./1_setup_download.sh"
+            exit 1
         fi
-        echo "→ Downloading / resuming: ${repo}"
+        echo "→ Ensuring cached: ${repo}"
         tensorfold pull "${repo}"
     done
 }
@@ -227,8 +242,6 @@ ensure_weights() {
 echo "→ Checking weights ..."
 ensure_weights "${HF_MODEL}" "${DRAFTER:-}"
 echo ""
-
-export MLX_USE_DEFAULT_DEVICE=gpu
 
 TF_PID=""
 PROXY_PID=""
@@ -246,13 +259,14 @@ cleanup() {
 }
 trap cleanup INT TERM HUP
 
-echo "=== Qwen3.8-27B — TensorFold ==="
+echo "=== Qwen3.8-27B — TensorFold (native $(tensorfold --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)) ==="
 echo "→ Model:    ${HF_MODEL}"
 echo "→ Drafter:  ${DRAFTER:-none}"
 echo "→ Alias:    ${MODEL_ALIAS}"
 echo "→ Context:  ${CONTEXT}"
+echo "→ Cache:    ${PROMPT_CACHE_GIB} GiB"
 echo "→ Thinking: $([[ "${THINKING}" == true ]] && echo on || echo off)"
-echo "→ Drafts:   $([[ "${NO_DRAFTS}" == true ]] && echo off || echo on)"
+echo "→ Drafts:   $([[ "${NO_DRAFTS}" == true ]] && echo off || echo on) (sampled preset: drafts only accelerate greedy requests)"
 echo "→ Port:     ${PORT}"
 echo "→ API:      http://127.0.0.1:${PORT}/v1"
 echo ""
@@ -266,9 +280,12 @@ SERVE_CMD=(
     --temperature 0.6
     --top-p 0.95
     --top-k 20
+    --prompt-cache-gib "${PROMPT_CACHE_GIB}"
+    --backend auto
+    --no-update-check
 )
 if [[ "${THINKING}" == true ]]; then
-    SERVE_CMD+=(--thinking)
+    SERVE_CMD+=(--thinking --reasoning-effort medium)
 else
     SERVE_CMD+=(--no-thinking)
 fi
