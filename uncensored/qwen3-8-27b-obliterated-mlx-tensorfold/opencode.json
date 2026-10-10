@@ -19,7 +19,7 @@
           "tool_call": true,
           "temperature": false,
           "limit": {
-            "context": 49152,
+            "context": 32768,
             "output": 8192
           },
           "modalities": {

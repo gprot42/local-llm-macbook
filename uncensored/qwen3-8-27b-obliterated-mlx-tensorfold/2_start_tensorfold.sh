@@ -25,7 +25,7 @@
 #   --port PORT            Listen port (default 8096; engine is this plus 10)
 #   --context N            Prompt + reply cap (default 262144, the checkpoint max; 0 = model max)
 #   --model PATH           Checkpoint directory or repo (default from .tensorfold_config)
-#   --prompt-cache-gib N   Prompt-state cache size, GiB (default 16; 0 turns it off)
+#   --prompt-cache-gib N   Prompt-state cache size, GiB (default 24; 0 turns it off)
 #   --chat-template FILE   Override the tool-capable chat template
 #   --no-tool-template     Serve with the checkpoint's own template (no tool rendering)
 #   --thinking             Open the think block (Qwen3.8 reasoning-effort medium)
@@ -56,7 +56,7 @@ PORT=8096
 ENGINE_PORT=8106
 CLI_CONTEXT=""
 MODEL_OVERRIDE=""
-PROMPT_CACHE_GIB="${QWEN38_OBL_PROMPT_CACHE_GIB:-16}"
+PROMPT_CACHE_GIB="${QWEN38_OBL_PROMPT_CACHE_GIB:-24}"
 TOOL_TEMPLATE="${SCRIPT_DIR}/chat_template_tools.jinja"
 USE_TOOL_TEMPLATE=true
 THINKING=false
