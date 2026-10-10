@@ -1,0 +1,33 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "tensorfold-qwen38-obl/qwen3.8-27b-obliterated-tensorfold",
+  "small_model": "tensorfold-qwen38-obl/qwen3.8-27b-obliterated-tensorfold",
+  "provider": {
+    "tensorfold-qwen38-obl": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "TensorFold Qwen3.8 OBLITERATED (local)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8096/v1",
+        "apiKey": "local",
+        "timeout": false,
+        "chunkTimeout": 900000
+      },
+      "models": {
+        "qwen3.8-27b-obliterated-tensorfold": {
+          "name": "Qwen3.8 27B OBLITERATED TensorFold (DFlash2, greedy, thinking off)",
+          "reasoning": false,
+          "tool_call": true,
+          "temperature": false,
+          "limit": {
+            "context": 49152,
+            "output": 8192
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        }
+      }
+    }
+  }
+}
