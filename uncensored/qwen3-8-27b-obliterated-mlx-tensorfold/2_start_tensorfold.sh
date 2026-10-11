@@ -57,6 +57,7 @@ ENGINE_PORT=8106
 CLI_CONTEXT=""
 MODEL_OVERRIDE=""
 PROMPT_CACHE_GIB="${QWEN38_OBL_PROMPT_CACHE_GIB:-24}"
+PARALLEL="${QWEN38_OBL_PARALLEL:-1}"   # 1.0.6+ reserves stream memory per slot up front; single-user needs few
 TOOL_TEMPLATE="${SCRIPT_DIR}/chat_template_tools.jinja"
 USE_TOOL_TEMPLATE=true
 THINKING=false
@@ -392,6 +393,7 @@ SERVE_CMD=(
     --temperature 0
     --top-p 1
     --prompt-cache-gib "${PROMPT_CACHE_GIB}"
+    --parallel "${PARALLEL}"
     --backend auto
     --no-update-check
 )

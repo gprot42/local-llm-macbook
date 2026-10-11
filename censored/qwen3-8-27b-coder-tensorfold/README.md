@@ -61,7 +61,7 @@ The mtplx sibling drafts with MTP heads inside one checkpoint. This stack drafts
 
 | File | Purpose |
 |------|---------|
-| `1_setup_download.sh` | brew-install native TensorFold (≥1.0.5), pull weights, write `.tensorfold_config` |
+| `1_setup_download.sh` | brew-install native TensorFold (≥1.0.7), pull weights, write `.tensorfold_config` |
 | `2_start_tensorfold.sh` | Serve on `:8769`. Harness gate on by default |
 | `test_harness.py` | Live API checks (tools, stream, multi-turn) |
 | `kilo.json` | Provider `tensorfold-qwen38` |
@@ -84,9 +84,9 @@ Context cap is 262144 tokens (prompt + reply), the checkpoint maximum. A 131072 
 ./2_start_tensorfold.sh --context 131072
 ```
 
-Migrated to the **native TensorFold engine (v1.0.5)** on 2026-10-10. TensorFold 1.0+ is a native Zig binary installed with `brew install ashhart/tensorfold/tensorfold` — no longer pip-installable, no venv; the loop proxy and harness run on the system python3. v1.0.5 is the first 1.0.x whose Qwen3.8-27B Metal kernels compile on macOS 27 (earlier 1.0.x crash at load with `LibraryLoad`). Verified live on an M5 Max, macOS 27.0.1: `Vontra/Qwen3.8-27B-MLX-4bit` loads (`tensorfold info` → qwen3_5, 4-bit group 64), serves in ~13s, and a tool call parses end-to-end through the proxy on :8769 (the checkpoint's own template renders tools, so no `--chat-template` is needed).
+Migrated to the **native TensorFold engine** on 2026-10-10, pinned to **≥1.0.7** (`TF_MIN_VERSION`). TensorFold 1.0+ is a native Zig binary installed with `brew install ashhart/tensorfold/tensorfold` — no longer pip-installable, no venv; the loop proxy and harness run on the system python3. v1.0.5 was the first 1.0.x whose Qwen3.8-27B Metal kernels compile on macOS 27 (earlier 1.0.x crash at load with `LibraryLoad`). Verified live on an M5 Max, macOS 27.0.1: `Vontra/Qwen3.8-27B-MLX-4bit` loads (`tensorfold info` → qwen3_5, 4-bit group 64), serves in ~13s, and a tool call parses end-to-end through the proxy on :8769 (the checkpoint's own template renders tools, so no `--chat-template` is needed).
 
-**Drafting caveat:** on the native engine Qwen3.8-27B drafts **greedy** requests only. This stack serves the Qwen3 coder preset (`temperature 0.6`), so a sampled request decodes plain (~19 tok/s) and the DFlash2 drafter does not accelerate it. Serve greedy if you want the draft speed. `--prompt-cache-gib` (default 16) keeps per-conversation prompt states. Upgrade the engine with `brew upgrade tensorfold`.
+**Sampled drafting:** since **TensorFold 1.0.6** the DFlash2 drafter accelerates **sampled** requests too (~125 tok/s code on an M-series Mac, vs ~20 on 1.0.5), so this stack's Qwen3 coder preset (`temperature 0.6`) gets the draft speed-up — serving greedy is no longer needed for performance. 1.0.6 also added concurrent serving (`--parallel`, up to 8 streams). `--prompt-cache-gib` (default 16) keeps per-conversation prompt states. Upgrade the engine with `brew upgrade tensorfold`.
 
 ## Harness
 

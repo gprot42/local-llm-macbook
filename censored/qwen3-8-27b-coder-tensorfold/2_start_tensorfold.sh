@@ -12,9 +12,9 @@
 # there is no venv. The loop proxy and harness run on the system python3.
 #
 # Sampling follows the Qwen3 coder preset (temperature 0.6, top-p 0.95, top-k 20).
-# NOTE: on the native engine Qwen3.8-27B drafts GREEDY requests only — a sampled
-# request decodes plain (~19 tok/s), so the DFlash2 drafter does not accelerate
-# the default preset. Serve greedy (edit the preset) if you want the draft speed.
+# Since TensorFold 1.0.6 the DFlash2 drafter accelerates SAMPLED requests too
+# (~125 tok/s code on an M-series Mac, vs ~20 on 1.0.5), so the coder preset gets
+# the draft speed-up — no need to serve greedy for performance.
 # Thinking is off by default. Pass --thinking to turn it on.
 #
 # The Vontra checkpoint's own chat template renders tools, so no --chat-template
@@ -54,6 +54,7 @@ ENGINE_PORT=8779
 CLI_CONTEXT=""
 MODEL_OVERRIDE=""
 PROMPT_CACHE_GIB="${QWEN38_PROMPT_CACHE_GIB:-16}"
+PARALLEL="${QWEN38_PARALLEL:-1}"   # 1.0.6+ reserves stream memory per slot up front; single-user needs few
 THINKING=false
 
 # Native binary lives in Homebrew's bin; put it on PATH for this process.
@@ -349,7 +350,7 @@ echo "→ Alias:    ${MODEL_ALIAS}"
 echo "→ Context:  ${CONTEXT}"
 echo "→ Cache:    ${PROMPT_CACHE_GIB} GiB"
 echo "→ Thinking: $([[ "${THINKING}" == true ]] && echo on || echo off)"
-echo "→ Drafts:   $([[ "${NO_DRAFTS}" == true ]] && echo off || echo on) (sampled preset: drafts only accelerate greedy requests)"
+echo "→ Drafts:   $([[ "${NO_DRAFTS}" == true ]] && echo off || echo on) (DFlash2 drafts sampled requests too since TF 1.0.6)"
 echo "→ Port:     ${PORT}"
 echo "→ API:      http://127.0.0.1:${PORT}/v1"
 echo ""
@@ -364,6 +365,7 @@ SERVE_CMD=(
     --top-p 0.95
     --top-k 20
     --prompt-cache-gib "${PROMPT_CACHE_GIB}"
+    --parallel "${PARALLEL}"
     --backend auto
     --no-update-check
 )

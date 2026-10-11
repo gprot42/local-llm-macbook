@@ -27,12 +27,15 @@ DEFAULT_DRAFTER="z-lab/Qwen3.8-27B-DFlash2"
 MODEL_ALIAS="${QWEN38_ALIAS:-qwen3.8-27b-tensorfold}"
 CONTEXT="${QWEN38_CONTEXT:-262144}"
 
-# TensorFold native binary. 1.0.5 is the first release whose Qwen3.8-27B Metal
-# kernels compile on macOS 26.3 / 27 (Metal 4.1); earlier 1.0.x crash at load
-# with LibraryLoad. Bump only after re-checking that the checkpoint loads
-# (`tensorfold info`) and a drafted reply equals `"draft": false`.
+# TensorFold native binary. 1.0.5 was the first release whose Qwen3.8-27B Metal
+# kernels compile on macOS 26.3 / 27 (Metal 4.1; earlier 1.0.x crash at load with
+# LibraryLoad). Pinned to 1.0.7: 1.0.6 made the DFlash2 drafter accelerate sampled
+# requests (this stack's coder preset) and added concurrent serving; 1.0.7 restored
+# lone-request draft speed. 1.0.6+ reserves stream memory per --parallel slot, so
+# 2_start_tensorfold.sh serves --parallel 1. Bump only after re-checking the
+# checkpoint loads (`tensorfold info`) and a drafted reply equals `"draft": false`.
 TF_FORMULA="${TF_FORMULA:-ashhart/tensorfold/tensorfold}"
-TF_MIN_VERSION="${TF_MIN_VERSION:-1.0.5}"
+TF_MIN_VERSION="${TF_MIN_VERSION:-1.0.7}"
 
 DEPS_ONLY=false
 WITH_DRAFTER=true

@@ -60,7 +60,7 @@ models/mlx-4bit   →  archived autosaddler V3 convert
 
 | File | Purpose |
 |------|---------|
-| `1_setup_download.sh` | brew-install native TensorFold (≥1.0.5), symlink the 4-bit weights, ensure the tool template, pull DFlash2 |
+| `1_setup_download.sh` | brew-install native TensorFold (≥1.0.7), symlink the 4-bit weights, ensure the tool template, pull DFlash2 |
 | `2_start_tensorfold.sh` | Engine `:8106`, proxy `:8096`, `--chat-template` for tools, harness gate after ready |
 | `chat_template_tools.jinja` | Qwen3 tool-capable chat template (the checkpoint's own has no tool support) |
 | `loop_proxy.py` | Repeat-tool nudge and stop. `python3 loop_proxy.py --self-test` |
@@ -81,7 +81,9 @@ Thinking stays off so tool calls are not wrapped in a think block. The mtplx not
 
 The engine context cap is 262144. Kilo and OpenCode in this folder cap context at **49152** and output at **8192**. On the mtplx sibling, decode fell to 2–5 tok/s past about 50k prompt tokens, and the catalog was set so compaction fired before that. Raise the client cap only if you mean to.
 
-Uses the **native TensorFold binary**, minimum **v1.0.5** (`TF_MIN_VERSION` in `1_setup_download.sh`), installed with `brew install ashhart/tensorfold/tensorfold`. v1.0.5 serves this affine 4-bit group-64 checkpoint with DFlash2, keeps per-conversation prompt states (`--prompt-cache-gib`, default 16), and is the first 1.0.x whose Qwen3.8-27B kernels compile on macOS 27. `2_start_tensorfold.sh` passes `--no-thinking` by default (add `--thinking` for reasoning-effort medium). Upgrade the engine with `brew upgrade tensorfold`.
+Uses the **native TensorFold binary**, minimum **v1.0.7** (`TF_MIN_VERSION` in `1_setup_download.sh`), installed with `brew install ashhart/tensorfold/tensorfold`. It serves this affine 4-bit group-64 checkpoint with DFlash2 and keeps per-conversation prompt states (`--prompt-cache-gib`, default 24). v1.0.5 was the first 1.0.x whose Qwen3.8-27B kernels compile on macOS 27. `2_start_tensorfold.sh` passes `--no-thinking` by default (add `--thinking` for reasoning-effort medium). Upgrade the engine with `brew upgrade tensorfold`.
+
+**Memory (1.0.6+):** the engine reserves stream memory per `--parallel` slot up front and refuses to start if weights + slots + cache exceed 70% of RAM. This stack is single-user (OpenCode sends one request at a time), so it serves `--parallel 1` (env `QWEN38_OBL_PARALLEL`), which leaves room for the 24 GiB cache. Raise `--parallel` only if you also lower `--prompt-cache-gib`.
 
 ## Harness
 
