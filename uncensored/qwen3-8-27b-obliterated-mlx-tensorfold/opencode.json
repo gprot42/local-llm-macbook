@@ -14,7 +14,7 @@
       },
       "models": {
         "qwen3.8-27b-obliterated-tensorfold": {
-          "name": "Qwen3.8 27B OBLITERATED TensorFold (DFlash2, greedy, thinking off)",
+          "name": "Qwen3.8-27B OBLITERATED — local TensorFold :8096 (DFlash2, greedy)",
           "reasoning": false,
           "tool_call": true,
           "temperature": false,
