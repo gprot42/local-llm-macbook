@@ -29,15 +29,18 @@ CONTEXT="${QWEN38_CONTEXT:-262144}"
 
 # TensorFold native binary. 1.0.5 was the first release whose Qwen3.8-27B Metal
 # kernels compile on macOS 26.3 / 27 (Metal 4.1; earlier 1.0.x crash at load with
-# LibraryLoad). Pinned to 1.0.11: 1.0.6 made the DFlash2 drafter accelerate sampled
+# LibraryLoad). Pinned to 1.2.9: 1.0.6 made the DFlash2 drafter accelerate sampled
 # requests (this stack's coder preset) and added concurrent serving; 1.0.8 cut the
 # served 27B's memory ~17.6 GiB and stopped the HTTP 500 on turns near the context
-# limit; 1.0.9 decodes faster; 1.0.11 is tested stable. 1.0.6+ reserves stream
-# memory per --parallel slot, so 2_start_tensorfold.sh serves --parallel 1. Bump
-# only after re-checking the checkpoint loads (`tensorfold info`) and a drafted
-# reply equals `"draft": false`.
+# limit; 1.2.0 decodes and prefills the 27B faster on Macs; 1.2.6 holds the prompt
+# cache up under concurrent follow-ups; 1.2.7 resumes a follow-up at the end of its
+# history even when the client drops earlier reasoning (first token in well under
+# a second instead of a full re-prefill). Saved prompt states are recomputed once
+# after upgrading to 1.2.8+. 1.0.6+ reserves stream memory per --parallel slot, so
+# 2_start_tensorfold.sh serves --parallel 1. Bump only after re-checking the
+# checkpoint loads (`tensorfold info`) and a drafted reply equals `"draft": false`.
 TF_FORMULA="${TF_FORMULA:-ashhart/tensorfold/tensorfold}"
-TF_MIN_VERSION="${TF_MIN_VERSION:-1.0.11}"
+TF_MIN_VERSION="${TF_MIN_VERSION:-1.2.9}"
 
 DEPS_ONLY=false
 WITH_DRAFTER=true
