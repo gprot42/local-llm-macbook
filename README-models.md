@@ -161,7 +161,7 @@ Kilo image attach needs a **vision** stack + its server running. See [README.md]
 |--|--|
 | **Role** | 🟢 **Ternary Qwen3.8 27B** on TensorFold (DFlash2 drafts, exact verify) |
 | **Modality** | **Text only** (the MLX pack has a vision tower; TensorFold does not load it) |
-| **Engine / size** | TensorFold 0.3.6.3 · `prism-ml/Ternary-Bonsai-2-27B-mlx-2bit` ~8.5 GB + drafter `z-lab/Qwen3.8-27B-DFlash2` ~3.8 GB |
+| **Engine / size** | TensorFold 0.6.6 (Python engine; native 1.x does not serve this pack) · `prism-ml/Ternary-Bonsai-2-27B-mlx-2bit` ~8.5 GB + drafter `z-lab/Qwen3.8-27B-DFlash2` ~3.8 GB |
 | **API** | `:8091/v1` · Kilo: `tensorfold-bonsai/ternary-bonsai-2-27b-tensorfold` |
 | **Harness** | `loop_proxy.py` + `test_harness.py` (`--gate` on post-start) |
 | **Sampling** | Non-thinking `0.7 / 0.8 / top-k 20` (no presence penalty; TensorFold has no such flag). Thinking preset is per-request on the OpenCode `-think` model |

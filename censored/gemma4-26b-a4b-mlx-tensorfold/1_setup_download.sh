@@ -101,6 +101,11 @@ python -m pip install --upgrade pip
 # that lived on gprot42/TensorFold@fix-gemma-tool-call-colon-prefix are in
 # v0.6.0+. Bump only after re-checking that gemma-4-26B-A4B loads and drafted
 # replies stay byte-exact against "draft": false.
+# The native engine (TensorFold 1.0+) does not serve this checkpoint. Re-checked
+# on 1.2.9 (2026-11-15): `tensorfold info` recognises the gemma4 family, but
+# `tensorfold serve` exits with GemmaMoeNotServed — native serves only Gemma 4
+# 31B and 12B, not the 26B-A4B MoE. So `info` passing is not enough; test serve.
+# v0.6.6 is the last 0.x tag, so this stack stays on the pip/venv Python engine.
 TF_VERSION="${TF_VERSION:-v0.6.6}"
 TF_REPO="${TF_REPO:-ashhart/TensorFold}"
 python -m pip install --upgrade "git+https://github.com/${TF_REPO}.git@${TF_VERSION}"

@@ -107,6 +107,12 @@ Pinned to **TensorFold 0.6.6** (`TF_VERSION` in `1_setup_download.sh`), upstream
 fixes are in this release. Bump only after re-checking the model loads and
 drafted replies stay byte-identical to `"draft": false`.
 
+**The native engine (TensorFold 1.0+) does not serve this checkpoint.** Re-checked
+on 1.2.9 (2026-11-15): `tensorfold info` recognises the gemma4 family, but
+`tensorfold serve` exits with `GemmaMoeNotServed` — native serves only Gemma 4
+31B and 12B, not the 26B-A4B MoE. v0.6.6 is the last 0.x tag, so this stack
+stays on the pip/venv Python engine.
+
 ## Harness (`loop_proxy.py` + `harness_judge.py`)
 
 `loop_proxy.py` owns `:8092` and forwards to the engine on `:8102`. It is the

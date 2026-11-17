@@ -92,8 +92,12 @@ python -m pip install --upgrade pip
 # serves this checkpoint (model_type prism_hadamard_qwen35, kernels qwen/prism/v1).
 # TensorFold 1.0+ is a native binary that does NOT serve Bonsai yet — it refuses
 # prism_hadamard_qwen35 and points back to the 0.6 line — so this stack stays on
-# the pip/venv Python engine. Do not float to main; bump TF_VERSION only after
-# re-checking draft==serial on a newer tag.
+# the pip/venv Python engine. Re-checked on native 1.2.9 (2026-11-15): still
+# refused ("no registered Zig family serves model_type prism_hadamard_qwen35"),
+# so none of the 1.x speed work reaches Bonsai. v0.6.6 is the last 0.x tag; there
+# is nothing newer to bump to. Others are asking upstream for the native port too
+# (ashhart/TensorFold#18, comment of 2026-11-16). Do not float to main; bump
+# TF_VERSION only after re-checking draft==serial on a newer tag.
 TF_VERSION="${TF_VERSION:-v0.6.6}"
 python -m pip install --upgrade "git+https://github.com/ashhart/TensorFold.git@${TF_VERSION}"
 
